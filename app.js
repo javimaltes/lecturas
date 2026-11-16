@@ -61,13 +61,12 @@ function avisar(texto) {
 // ---------- Datos ----------
 const ESTADOS = [
   { id: 'Cajón de sastre', icono: 'cajon', nota: 'Me suena interesante, ya veré si lo leo', corto: 'Cajón de sastre' },
-  { id: 'Por revisar', icono: 'buscar', nota: 'Mirarlo con calma y decidir', corto: 'Por revisar' },
   { id: 'Quiero leerlo', emoji: '🐘', nota: 'Lo tengo en la lista', corto: 'Quiero leer' },
   { id: 'Leyendo', icono: 'libro', nota: 'Lo estoy leyendo ahora', corto: 'Leyendo' },
   { id: 'Leído', icono: 'leido', nota: 'Terminado', corto: 'Leídos' },
   { id: 'Abandonado', icono: 'abandonado', nota: 'Lo dejé a medias', corto: 'Abandonados' },
 ];
-const estadoDe = id => ESTADOS.find(e => e.id === id) || ESTADOS[1];
+const estadoDe = id => ESTADOS.find(e => e.id === id) || ESTADOS[0];
 const simboloEstado = e => (e.emoji ? `<span aria-hidden="true">${e.emoji}</span>` : icono(e.icono));
 const PROCEDENCIAS = [
   { id: 'Mío', icono: 'casa' },
@@ -82,22 +81,32 @@ const CATEGORIAS_INICIALES = [
   { orden: 4, nombre: 'Para investigar', colorHex: '#FF9500' },
 ];
 
+// Cada cambio queda fechado (campo "modificado") y cada borrado se apunta en "borrados":
+// así la sincronización sabe qué versión es la más reciente en cada dispositivo.
+const ALMACENES_SYNC = ['libros', 'citas', 'categorias'];
 const BD = {
   db: null,
   memoria: null, // si el navegador no deja guardar, se trabaja en memoria
   abrir() {
+    const vacia = () => ({ libros: {}, citas: {}, categorias: {}, borrados: {} });
     return new Promise(ok => {
       let r;
-      try { r = indexedDB.open('mislibros', 1); } catch { this.memoria = { libros: {}, citas: {}, categorias: {} }; return ok(false); }
+      try { r = indexedDB.open('mislibros', 2); } catch { this.memoria = vacia(); return ok(false); }
       r.onupgradeneeded = () => {
         const db = r.result;
-        for (const [n, k] of [['libros', 'id'], ['citas', 'id'], ['categorias', 'orden']]) {
+        for (const [n, k] of [['libros', 'id'], ['citas', 'id'], ['categorias', 'orden'], ['borrados', 'id']]) {
           if (!db.objectStoreNames.contains(n)) db.createObjectStore(n, { keyPath: k });
         }
       };
       r.onsuccess = () => { this.db = r.result; ok(true); };
-      r.onerror = () => { this.memoria = { libros: {}, citas: {}, categorias: {} }; ok(false); };
+      r.onerror = () => { this.memoria = vacia(); ok(false); };
     });
+  },
+  _marcar(a, o) {
+    if (ALMACENES_SYNC.includes(a)) o.modificado = ahora();
+  },
+  _avisar(a) {
+    if (ALMACENES_SYNC.includes(a)) window.alCambiarDatos?.();
   },
   _tx(almacen, modo, fn) {
     return new Promise((ok, mal) => {
@@ -113,14 +122,30 @@ const BD = {
   },
   async todos(a) { return this.memoria ? Object.values(this.memoria[a]) : this._tx(a, 'readonly', s => s.getAll()); },
   async poner(a, o) {
+    this._marcar(a, o);
+    await this.ponerCrudo(a, o);
+    this._avisar(a);
+  },
+  async ponerVarios(a, lista) {
+    for (const o of lista) this._marcar(a, o);
+    await this.ponerVariosCrudo(a, lista);
+    this._avisar(a);
+  },
+  async borrar(a, id) {
+    await this.borrarCrudo(a, id);
+    if (a === 'libros' || a === 'citas') await this.ponerCrudo('borrados', { id, fecha: ahora() });
+    this._avisar(a);
+  },
+  // Versiones "crudas": sin fechar ni avisar (las usa la sincronización al traer datos).
+  async ponerCrudo(a, o) {
     if (this.memoria) { this.memoria[a][o.id ?? o.orden] = o; return; }
     return this._tx(a, 'readwrite', s => s.put(o));
   },
-  async ponerVarios(a, lista) {
+  async ponerVariosCrudo(a, lista) {
     if (this.memoria) { for (const o of lista) this.memoria[a][o.id ?? o.orden] = o; return; }
     return this._tx(a, 'readwrite', s => { for (const o of lista) s.put(o); });
   },
-  async borrar(a, id) {
+  async borrarCrudo(a, id) {
     if (this.memoria) { delete this.memoria[a][id]; return; }
     return this._tx(a, 'readwrite', s => s.delete(id));
   },
@@ -136,7 +161,7 @@ const E = {
   filtroCitas: { cat: -1, texto: '' },
 };
 
-function nuevoLibro(d = {}, estado = 'Por revisar') {
+function nuevoLibro(d = {}, estado = 'Cajón de sastre') {
   return {
     id: uid(), isbn: d.isbn || '', titulo: d.titulo || '', autores: d.autores || '', editorial: d.editorial || '',
     fechaPublicacion: d.fechaPublicacion || '', paginas: d.paginas || 0, descripcion: d.descripcion || '',
@@ -567,7 +592,7 @@ async function restaurarCopia(json) {
     const l = nuevoLibro({
       isbn: e.isbn, titulo: e.titulo, autores: e.autores, editorial: e.editorial, fechaPublicacion: e.fechaPublicacion,
       paginas: e.paginas, descripcion: e.descripcion, portada: e.portada ? dataURLDe(e.portada) : (e.portadaURL || ''),
-    }, e.estado || 'Por revisar');
+    }, e.estado && e.estado !== 'Por revisar' ? e.estado : 'Cajón de sastre');
     Object.assign(l, {
       procedencia: e.procedencia || 'Mío', lugar: e.lugar || '', fechaDevolucion: e.fechaDevolucion || null,
       paginaActual: e.paginaActual || 0, notas: e.notas || '', fechaInicio: e.fechaInicio || null, fechaFin: e.fechaFin || null,
@@ -766,7 +791,7 @@ function pintarColumna() {
   const cuenta = id => E.libros.filter(l => l.estado === id).length;
   const etiquetas = todasLasEtiquetas();
   const hayFiltro = E.filtro.estado || E.filtro.prestados || E.filtro.etiqueta;
-  const resumen = [['Cajón de sastre', cuenta('Cajón de sastre')], ['Por revisar', cuenta('Por revisar')], ['Quiero leerlo', cuenta('Quiero leerlo')], ['Leído', leidosEsteAno(), 'Leídos este año']]
+  const resumen = [['Cajón de sastre', cuenta('Cajón de sastre')], ['Quiero leerlo', cuenta('Quiero leerlo')], ['Leyendo', cuenta('Leyendo')], ['Leído', leidosEsteAno(), 'Leídos este año']]
     .map(([id, n, texto]) => `<button type="button" data-accion="filtro-estado" data-estado="${esc(id)}" aria-pressed="${E.filtro.estado === id}">
       <b>${n}</b><small>${esc(texto || estadoDe(id).corto)}</small></button>`).join('');
 
@@ -787,7 +812,7 @@ function pintarColumna() {
     <div class="caja-busqueda">${icono('buscar')}<input id="buscar-libros" class="campo" type="search" placeholder="Título, autor o etiqueta" value="${esc(texto)}" autocomplete="off"></div>
     <div class="resumen">${resumen}</div>
     <div class="filtros">
-      <select class="chip ${E.filtro.estado && !['Cajón de sastre', 'Por revisar', 'Quiero leerlo', 'Leído'].includes(E.filtro.estado) ? 'activo' : ''}" id="filtro-estado" aria-label="Filtrar por estado">
+      <select class="chip ${E.filtro.estado && !['Cajón de sastre', 'Quiero leerlo', 'Leyendo', 'Leído'].includes(E.filtro.estado) ? 'activo' : ''}" id="filtro-estado" aria-label="Filtrar por estado">
         <option value="">Todos los estados</option>
         ${ESTADOS.map(e => `<option value="${esc(e.id)}" ${E.filtro.estado === e.id ? 'selected' : ''}>${e.emoji ? e.emoji + ' ' : ''}${esc(e.id)}</option>`).join('')}
       </select>
@@ -1084,7 +1109,7 @@ async function pintarPestanaAnadir() {
       <p class="estado-escaner" id="estado-escaner"><span class="cargando"></span> Abriendo la cámara…</p>
       <div id="resultado-codigo"></div>
       <form class="fila-campo" data-form="isbn"><input class="campo" id="isbn-manual" inputmode="numeric" placeholder="O escribe el ISBN (13 cifras bajo el código)" autocomplete="off"><button class="boton principal" type="submit">Buscar</button></form>
-      <label class="boton" style="align-self:flex-start">${icono('foto')} Leer el código de una foto<input type="file" accept="image/*" data-archivo="codigo" hidden></label>`;
+      <label class="boton" style="align-self:flex-start">${icono('camara')} Hacer una foto al código<input type="file" accept="image/*" capture="environment" data-archivo="codigo" hidden></label>`;
     iniciarEscaner();
   } else if (pestanaAnadir === 'buscar') {
     c.innerHTML = `
@@ -1099,7 +1124,7 @@ async function pintarPestanaAnadir() {
         <span class="espacio"></span>
         <label class="etiqueta-campo" style="flex-direction:row;align-items:center;gap:8px">Guardar en
           <select class="campo" id="destino" style="width:auto;min-height:38px">
-            ${['Cajón de sastre', 'Por revisar', 'Quiero leerlo'].map(e => `<option ${e === 'Cajón de sastre' ? 'selected' : ''}>${esc(e)}</option>`).join('')}
+            ${['Cajón de sastre', 'Quiero leerlo'].map(e => `<option ${e === 'Cajón de sastre' ? 'selected' : ''}>${esc(e)}</option>`).join('')}
           </select></label>
       </div>
       <button type="button" class="boton principal grande" data-accion="procesar-pegado">Añadir libros</button>
@@ -1113,51 +1138,195 @@ async function pintarPestanaAnadir() {
 }
 
 function estadoEscaner(html) { const e = $('#estado-escaner'); if (e) e.innerHTML = html; }
-const formatosCodigo = () => [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E];
+// ----- Lector de códigos de barras -----
+// Lee la franja central de la cámara a buena resolución con ZXing (más fiable con los
+// códigos de los libros). Si ZXing no carga, se usa el lector anterior (html5-qrcode).
+let pistasZX = null;
+let lectorZX = null;
+function lectorCodigos() {
+  const ZX = window.ZXing;
+  if (!ZX?.MultiFormatReader) return null;
+  if (!lectorZX) {
+    pistasZX = new Map();
+    const formatos = [ZX.BarcodeFormat.EAN_13, ZX.BarcodeFormat.EAN_8, ZX.BarcodeFormat.UPC_A, ZX.BarcodeFormat.UPC_E].filter(f => f !== undefined);
+    pistasZX.set(ZX.DecodeHintType.POSSIBLE_FORMATS, formatos);
+    pistasZX.set(ZX.DecodeHintType.TRY_HARDER, true);
+    lectorZX = new ZX.MultiFormatReader();
+    lectorZX.setHints(pistasZX);
+  }
+  return lectorZX;
+}
+
+/** Busca un código de barras en una zona de un lienzo. Devuelve el texto o null. */
+function leerCodigoDeLienzo(ctx, x, y, w, h) {
+  const lector = lectorCodigos();
+  if (!lector || w < 20 || h < 20) return null;
+  const ZX = window.ZXing;
+  const d = ctx.getImageData(x, y, w, h).data;
+  const gris = new Uint8ClampedArray(w * h);
+  for (let i = 0, j = 0; i < gris.length; i++, j += 4) gris[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+  const fuente = new ZX.RGBLuminanceSource(gris, w, h);
+  for (const Binarizador of [ZX.HybridBinarizer, ZX.GlobalHistogramBinarizer]) {
+    try {
+      return lector.decodeWithState(new ZX.BinaryBitmap(new Binarizador(fuente))).getText();
+    } catch { /* no hay código en esta pasada */ }
+  }
+  return null;
+}
+
+async function leerCodigoDeFoto(archivo) {
+  if (lectorCodigos()) {
+    const url = URL.createObjectURL(archivo);
+    try {
+      const img = await new Promise((ok, mal) => { const i = new Image(); i.onload = () => ok(i); i.onerror = mal; i.src = url; });
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      for (const maximo of [1600, 2400, 1000]) {
+        const e = Math.min(1, maximo / Math.max(img.naturalWidth, img.naturalHeight));
+        const w = Math.round(img.naturalWidth * e);
+        const h = Math.round(img.naturalHeight * e);
+        for (const girada of [false, true]) {
+          if (girada) {
+            c.width = h; c.height = w;
+            ctx.save(); ctx.translate(h, 0); ctx.rotate(Math.PI / 2); ctx.drawImage(img, 0, 0, w, h); ctx.restore();
+          } else {
+            c.width = w; c.height = h;
+            ctx.drawImage(img, 0, 0, w, h);
+          }
+          let r = leerCodigoDeLienzo(ctx, 0, 0, c.width, c.height);
+          if (r) return r;
+          const alto = Math.round(c.height / 3);
+          for (let y = 0; y + alto <= c.height; y += Math.round(alto / 2)) {
+            r = leerCodigoDeLienzo(ctx, 0, y, c.width, alto);
+            if (r) return r;
+          }
+        }
+      }
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  if (window.Html5Qrcode) {
+    const h = new Html5Qrcode('lector-oculto', { verbose: false });
+    try { return await h.scanFile(archivo, false); } catch { return null; }
+  }
+  throw new Error('sin-libreria');
+}
+
+function mensajeErrorCamara(err) {
+  const nombre = String(err?.name || err);
+  if (/NotAllowed|Permission|Security/i.test(nombre)) {
+    return 'No hay permiso para usar la cámara. En el iPhone: Ajustes → Safari → Cámara → «Preguntar» o «Permitir», y vuelve a abrir la app. También puedes escribir el ISBN o hacer una foto al código.';
+  }
+  if (/NotReadable|TrackStart/i.test(nombre)) return 'Otra app está usando la cámara. Ciérrala y vuelve a intentarlo.';
+  return 'No encuentro ninguna cámara. Escribe el ISBN o haz una foto al código.';
+}
 
 async function iniciarEscaner() {
-  if (!$('#lector')) return;
-  if (!window.Html5Qrcode) {
-    $('#lector').hidden = true;
-    estadoEscaner('No se ha podido cargar el lector de códigos. Escribe el ISBN aquí debajo.');
-    return;
-  }
+  const zona = $('#lector');
+  if (!zona) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    $('#lector').hidden = true;
-    estadoEscaner('Este navegador no deja usar la cámara. Escribe el ISBN o lee el código de una foto.');
+    zona.hidden = true;
+    estadoEscaner('Este navegador no deja usar la cámara en directo. Escribe el ISBN o haz una foto al código.');
     return;
   }
-  const propio = new Html5Qrcode('lector', { formatsToSupport: formatosCodigo(), verbose: false, experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
-  escaner = propio;
+  if (!lectorCodigos()) return iniciarEscanerAlternativo();
+
+  zona.innerHTML = `<video playsinline muted autoplay></video><div class="guia" aria-hidden="true"><span></span></div>`;
+  const video = $('video', zona);
+  const sesion = { activa: true, stream: null, t: null };
+  escaner = sesion;
   try {
-    await propio.start(
-      { facingMode: 'environment' },
-      { fps: 12, qrbox: (w, h) => ({ width: Math.max(60, Math.min(320, Math.round(w * 0.85))), height: Math.max(60, Math.min(160, Math.round(h * 0.45))) }) },
-      codigo => alLeerCodigo(codigo),
-      () => {},
-    );
-    // Si mientras se abría la cámara se cerró la ventana o se cambió de pestaña, se apaga.
-    if (escaner !== propio || !document.body.contains($('#lector'))) {
-      try { await propio.stop(); } catch { /* nada */ }
-      return;
+    sesion.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    });
+  } catch (err) {
+    if (escaner !== sesion) return;
+    escaner = null;
+    zona.hidden = true;
+    estadoEscaner(mensajeErrorCamara(err));
+    return;
+  }
+  if (escaner !== sesion || !document.body.contains(zona)) {
+    sesion.stream.getTracks().forEach(t => t.stop());
+    return;
+  }
+  video.srcObject = sesion.stream;
+  try { await video.play(); } catch { /* en iOS arranca solo al estar silenciado */ }
+
+  // Enfoque continuo y algo de zoom: así se lee sin acercar tanto el libro
+  // (los iPhone Pro no enfocan bien muy de cerca).
+  const pista = sesion.stream.getVideoTracks()[0];
+  try {
+    const cap = pista.getCapabilities?.() || {};
+    const extra = {};
+    if (Array.isArray(cap.focusMode) && cap.focusMode.includes('continuous')) extra.focusMode = 'continuous';
+    if (cap.zoom && cap.zoom.max >= 1.5) extra.zoom = Math.min(2, cap.zoom.max);
+    if (Object.keys(extra).length) await pista.applyConstraints({ advanced: [extra] });
+  } catch { /* no todas las cámaras lo permiten */ }
+
+  estadoEscaner('Pon el código de barras dentro del recuadro. Si se ve borroso, aleja un poco el libro.');
+  const lienzo = document.createElement('canvas');
+  const ctx = lienzo.getContext('2d', { willReadFrequently: true });
+  const vuelta = () => {
+    if (escaner !== sesion || !sesion.activa) return;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (vw && vh) {
+      const sw = Math.round(vw * 0.9);
+      const sh = Math.round(vh * (vh > vw ? 0.3 : 0.45));
+      const sx = Math.round((vw - sw) / 2);
+      const sy = Math.round((vh - sh) / 2);
+      const e = Math.min(1, 1280 / sw);
+      lienzo.width = Math.round(sw * e);
+      lienzo.height = Math.round(sh * e);
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, lienzo.width, lienzo.height);
+      let codigo = null;
+      try { codigo = leerCodigoDeLienzo(ctx, 0, 0, lienzo.width, lienzo.height); } catch { /* sigue intentándolo */ }
+      if (codigo) {
+        sesion.activa = false;
+        navigator.vibrate?.(60);
+        alLeerCodigo(codigo);
+        return;
+      }
     }
+    sesion.t = setTimeout(vuelta, 90);
+  };
+  vuelta();
+}
+
+async function iniciarEscanerAlternativo() {
+  const zona = $('#lector');
+  if (!window.Html5Qrcode) {
+    zona.hidden = true;
+    estadoEscaner('No se ha podido cargar el lector de códigos (la primera vez necesita conexión). Escribe el ISBN aquí debajo.');
+    return;
+  }
+  const h = new Html5Qrcode('lector', { verbose: false, experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
+  const sesion = { parar: async () => { try { await h.stop(); } catch { /* nada */ } try { h.clear(); } catch { /* nada */ } } };
+  escaner = sesion;
+  try {
+    await h.start({ facingMode: 'environment' }, { fps: 10, videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } }, codigo => alLeerCodigo(codigo), () => {});
+    if (escaner !== sesion) { await sesion.parar(); return; }
     estadoEscaner('Apunta al código de barras de la contraportada.');
   } catch (err) {
-    if (escaner !== propio) return;
+    if (escaner !== sesion) return;
     escaner = null;
-    $('#lector').hidden = true;
-    const permiso = /NotAllowed|Permission/i.test(String(err?.name || err));
-    estadoEscaner(permiso
-      ? 'No hay permiso para usar la cámara. En el iPhone: Ajustes → Safari → Cámara → Permitir. También puedes escribir el ISBN.'
-      : 'No encuentro ninguna cámara. Escribe el ISBN o lee el código de una foto.');
+    zona.hidden = true;
+    estadoEscaner(mensajeErrorCamara(err));
   }
 }
+
 async function pararEscaner() {
-  if (!escaner) return;
-  const e = escaner;
+  const s = escaner;
   escaner = null;
-  try { await e.stop(); } catch { /* ya estaba parado */ }
-  try { e.clear(); } catch { /* nada */ }
+  if (!s) return;
+  if (s.parar) { await s.parar(); return; }
+  s.activa = false;
+  clearTimeout(s.t);
+  s.stream?.getTracks().forEach(t => t.stop());
 }
 
 async function alLeerCodigo(codigo) {
@@ -1185,7 +1354,7 @@ async function buscarYAnadirIsbn(isbn) {
   }
   const r = await Buscador.buscarIsbn(isbn);
   if (!r.d && r.sinRed) {
-    const l = libroPendiente({ tipo: 'isbn', valor: isbn }, 'Por revisar');
+    const l = libroPendiente({ tipo: 'isbn', valor: isbn }, 'Cajón de sastre');
     await anadirLibro(l);
     estadoEscaner(`${icono('nube')} Sin conexión: he guardado el ISBN <b>${esc(isbn)}</b>. Se completará solo cuando vuelvas a tener cobertura.`);
     destino.innerHTML = `<div class="fila-campo" style="flex-wrap:wrap">
@@ -1195,7 +1364,7 @@ async function buscarYAnadirIsbn(isbn) {
     return;
   }
   if (r.d) {
-    const l = nuevoLibro(r.d, 'Por revisar');
+    const l = nuevoLibro(r.d, 'Cajón de sastre');
     await anadirLibro(l);
     E.sel = l.id;
     E.vista = 'libros';
@@ -1436,8 +1605,10 @@ function ventanaCopia() {
   abrirVentana({
     titulo: 'Copia y ajustes',
     cuerpo: `
+      ${window.Sync ? Sync.htmlAjustes() : ''}
       <div class="bloque-copia">
-        <p class="ayuda">Tus libros se guardan <b>solo en este navegador</b>. Haz copias de vez en cuando y guárdalas en iCloud Drive, Google Drive o tu correo. Con la copia también puedes pasar tus libros del móvil al ordenador o al revés.</p>
+        <h3 class="seccion" style="margin:0;font-size:15px">Copia de seguridad</h3>
+        <p class="ayuda">Además de sincronizar, conviene guardar de vez en cuando una copia en iCloud Drive, Google Drive o tu correo. Con la copia también puedes pasar libros de un dispositivo a otro a mano.</p>
         <p class="ayuda">${ultima ? 'Última copia: ' + fechaCorta(ultima) + ' (' + hace(ultima) + ')' : '<b class="mal">Aún no has hecho ninguna copia.</b>'} · ${E.libros.length} libros, ${E.citas.length} citas</p>
         <div class="botones">
           <button type="button" class="boton principal" data-accion="exportar" data-que="json">${icono('descargar')} Guardar copia completa</button>
@@ -1513,7 +1684,7 @@ const acciones = {
   'pestana-anadir': b => { pestanaAnadir = b.dataset.pestana; if (!$('#contenido-anadir')) ventanaAnadir(); else pintarPestanaAnadir(); },
   'seguir-escaneando': () => { buscandoCodigo = false; pintarPestanaAnadir(); },
   'crear-con-isbn': async b => {
-    const l = nuevoLibro({ isbn: b.dataset.isbn }, 'Por revisar');
+    const l = nuevoLibro({ isbn: b.dataset.isbn }, 'Cajón de sastre');
     await anadirLibro(l);
     E.sel = l.id;
     cerrarVentana();
@@ -1619,7 +1790,7 @@ document.addEventListener('submit', async e => {
   if (tipo === 'mano') {
     const titulo = $('#titulo-mano').value.trim();
     if (!titulo) return;
-    const l = nuevoLibro({ titulo }, 'Por revisar');
+    const l = nuevoLibro({ titulo }, 'Cajón de sastre');
     await anadirLibro(l);
     E.sel = l.id;
     cerrarVentana();
@@ -1696,16 +1867,18 @@ document.addEventListener('change', async e => {
     if (ultima && archivos.length === 1) ventanaCita(ultima.id, true);
   }
   if (archivo === 'codigo') {
-    if (!window.Html5Qrcode) { avisar('No se ha podido cargar el lector de códigos'); return; }
     estadoEscaner('<span class="cargando"></span> Buscando el código en la foto…');
     try {
-      const lector = new Html5Qrcode('lector-oculto', { formatsToSupport: formatosCodigo(), verbose: false });
-      const codigo = await lector.scanFile(archivos[0], false);
+      const codigo = await leerCodigoDeFoto(archivos[0]);
+      if (!codigo) {
+        estadoEscaner('No he encontrado un código de barras en esa foto. Hazla con el código recto, bien iluminado y ocupando buena parte de la foto.');
+        return;
+      }
       await pararEscaner();
       if ($('#lector')) $('#lector').hidden = true;
       alLeerCodigo(codigo);
     } catch {
-      estadoEscaner('No he encontrado un código de barras en esa foto. Prueba más cerca y con el código recto.');
+      estadoEscaner('No se ha podido cargar el lector de códigos (la primera vez necesita conexión). Escribe el ISBN aquí debajo.');
     }
   }
   if (archivo === 'copia') {
@@ -1731,8 +1904,11 @@ async function arrancar() {
   try { await navigator.storage?.persist?.(); } catch { /* el navegador decide */ }
   [E.libros, E.citas, E.categorias] = await Promise.all([BD.todos('libros'), BD.todos('citas'), BD.todos('categorias')]);
   for (const c of CATEGORIAS_INICIALES) {
-    if (!E.categorias.some(k => k.orden === c.orden)) { E.categorias.push({ ...c }); await BD.poner('categorias', { ...c }); }
+    if (!E.categorias.some(k => k.orden === c.orden)) { E.categorias.push({ ...c }); await BD.ponerCrudo('categorias', { ...c }); }
   }
+  const porRevisar = E.libros.filter(l => l.estado === 'Por revisar');
+  for (const l of porRevisar) l.estado = 'Cajón de sastre';
+  if (porRevisar.length) await BD.ponerVarios('libros', porRevisar);
   E.libros.sort((a, b) => String(b.fechaAlta).localeCompare(String(a.fechaAlta)));
   if (innerWidth >= 920 && E.libros.length) E.sel = E.libros[0].id;
   pintarTodo();
@@ -1741,6 +1917,7 @@ async function arrancar() {
   addEventListener('offline', pintarEstadoRed);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') completarPendientes(); });
   setTimeout(() => completarPendientes(), 2000);
+  window.Sync?.arrancar();
   if (!persistente) avisar('Este navegador no deja guardar datos (¿modo privado?). Lo que añadas se perderá al cerrar.');
 }
 arrancar();

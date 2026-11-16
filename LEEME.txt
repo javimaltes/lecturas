@@ -1,6 +1,6 @@
 MIS LIBROS (WEB) - CÓMO PUBLICARLA GRATIS EN GITHUB PAGES
 
-Son 7 archivos: index.html, app.js, sw.js, manifest.webmanifest e icono-180/192/512.png
+Son 8 archivos: index.html, app.js, sync.js, sw.js, manifest.webmanifest e icono-180/192/512.png
 
 === 1. CREAR EL REPOSITORIO (una sola vez) ===
   github.com -> botón "+" (arriba a la derecha) -> New repository
@@ -11,7 +11,7 @@ Son 7 archivos: index.html, app.js, sw.js, manifest.webmanifest e icono-180/192/
 
 === 2. SUBIR LOS ARCHIVOS ===
   En la página del repositorio, pulsa "uploading an existing file".
-  Arrastra los 7 archivos (no hace falta este LEEME) y pulsa "Commit changes".
+  Arrastra los 8 archivos (no hace falta este LEEME) y pulsa "Commit changes".
 
 === 3. ENCENDER GITHUB PAGES ===
   Pestaña "Settings" del repositorio -> en el menú de la izquierda "Pages".
@@ -38,10 +38,39 @@ Son 7 archivos: index.html, app.js, sw.js, manifest.webmanifest e icono-180/192/
   Las fotos de citas también se guardan sin red. Para convertirlas en texto, el
   lector necesita internet la primera vez que se usa; después suele funcionar sin red.
 
+=== SINCRONIZAR iPHONE Y ORDENADOR (una sola vez) ===
+  Tus libros se guardan en un SEGUNDO repositorio, PRIVADO (nadie más lo ve).
+
+  A) Crear el repositorio de datos
+     github.com -> "+" -> New repository -> nombre: lecturas-datos
+     Marca "Private" y también "Add a README file" -> Create repository.
+
+  B) Crear la clave para que la app pueda escribir ahí
+     Tu foto (arriba a la derecha) -> Settings -> abajo del todo a la izquierda
+     "Developer settings" -> "Personal access tokens" -> "Fine-grained tokens"
+     -> "Generate new token".
+       - Token name: Mis Libros
+       - Expiration: la más larga que te deje (o "No expiration" si aparece)
+       - Repository access: "Only select repositories" -> elige lecturas-datos
+       - Permissions -> Repository permissions -> "Contents": "Read and write"
+     -> "Generate token" y COPIA la clave (empieza por github_pat_).
+     GitHub solo la enseña una vez: guárdala en las Notas o en tus contraseñas.
+
+  C) Conectar cada dispositivo (iPhone y ordenador)
+     En la app: botón del disquete -> "Sincronizar entre dispositivos"
+       Repositorio: javimaltes/lecturas-datos
+       Clave: la que copiaste
+     -> "Conectar". Lo que tuvieras en cada dispositivo se junta, no se pierde nada.
+
+  A partir de ahí se sincroniza solo: al abrir la app, al hacer cambios y al
+  volver la cobertura. La nube con un visto, arriba, indica que está al día.
+  Si la clave caduca, la app te avisará: crea otra (paso B) y vuelve a conectar.
+
 === IMPORTANTE: TUS DATOS ===
-  Cada dispositivo guarda sus propios libros. Para pasarlos del móvil al
-  ordenador (o al revés): botón del disquete -> "Guardar copia completa" en uno,
-  y "Elegir copia…" en el otro. Haz copias de vez en cuando (iCloud Drive o correo).
+  Todo se guarda solo, al momento, en el dispositivo. Si conectas la
+  sincronización, además se guarda en tu repositorio privado lecturas-datos.
+  Aun así, haz de vez en cuando una copia: botón del disquete ->
+  "Guardar copia completa" (guárdala en iCloud Drive o en tu correo).
 
 === ACTUALIZAR ===
   Cuando te pase una versión nueva: en el repositorio, "Add file" ->
