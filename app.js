@@ -511,17 +511,135 @@ function comprimirImagen(archivo, max = 1800, calidad = 0.82) {
 
 let trabajadorOCR = null;
 let alProgresoOCR = null;
-async function leerTextoDeFoto(dataURL) {
+async function trabajador() {
   if (!window.Tesseract) throw new Error('sin-libreria');
   if (!trabajadorOCR) {
-    trabajadorOCR = await Tesseract.createWorker('spa', 1, {
-      logger: m => alProgresoOCR?.(m),
-    });
+    trabajadorOCR = await Tesseract.createWorker('spa', 1, { logger: m => alProgresoOCR?.(m) });
+    await trabajadorOCR.setParameters({ preserve_interword_spaces: '1' });
   }
-  const { data } = await trabajadorOCR.recognize(dataURL);
+  return trabajadorOCR;
+}
+function cargarImagen(src) {
+  return new Promise((ok, mal) => { const i = new Image(); i.onload = () => ok(i); i.onerror = mal; i.src = src; });
+}
+
+/** Pasa a grises y quita sombras y luz desigual: divide cada punto por el "fondo" (la foto muy
+ *  desenfocada), así el papel queda blanco y la tinta oscura aunque haya una sombra. */
+function limpiarParaLeer(lienzo) {
+  const w = lienzo.width;
+  const h = lienzo.height;
+  const ctx = lienzo.getContext('2d', { willReadFrequently: true });
+  const datos = ctx.getImageData(0, 0, w, h);
+  const d = datos.data;
+  // fondo: reducir mucho y volver a ampliar = desenfoque barato
+  const pw = Math.max(8, Math.round(w / 24));
+  const ph = Math.max(8, Math.round(h / 24));
+  const peq = document.createElement('canvas');
+  peq.width = pw; peq.height = ph;
+  const pctx = peq.getContext('2d');
+  pctx.imageSmoothingQuality = 'high';
+  pctx.drawImage(lienzo, 0, 0, pw, ph);
+  const fondoC = document.createElement('canvas');
+  fondoC.width = w; fondoC.height = h;
+  const fctx = fondoC.getContext('2d', { willReadFrequently: true });
+  fctx.imageSmoothingQuality = 'high';
+  fctx.drawImage(peq, 0, 0, w, h);
+  const f = fctx.getImageData(0, 0, w, h).data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gris = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const fondo = Math.max(1, f[i] * 0.299 + f[i + 1] * 0.587 + f[i + 2] * 0.114);
+    // 0 = tinta, 255 = papel, con algo más de contraste
+    let v = (gris / fondo) * 255;
+    v = (v - 80) * 1.55;
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(datos, 0, 0);
+  return lienzo;
+}
+
+/** Borra líneas finas y largas (subrayados a lápiz o boli) que confunden al lector. */
+function quitarSubrayados(lienzo, altoLinea) {
+  const w = lienzo.width;
+  const h = lienzo.height;
+  const ctx = lienzo.getContext('2d', { willReadFrequently: true });
+  const datos = ctx.getImageData(0, 0, w, h);
+  const d = datos.data;
+  const oscuro = (x, y) => d[(y * w + x) * 4] < 150;
+  const largoMin = Math.max(30, Math.round(altoLinea * 1.6));
+  const grosor = Math.max(2, Math.round(altoLinea * 0.12));
+  const borrar = [];
+  for (let y = grosor + 1; y < h - grosor - 1; y++) {
+    let ini = -1;
+    for (let x = 0; x <= w; x++) {
+      const o = x < w && oscuro(x, y);
+      if (o && ini < 0) ini = x;
+      if (!o && ini >= 0) {
+        if (x - ini >= largoMin) {
+          for (let k = ini; k < x; k++) {
+            // es una raya si por encima y por debajo, a poca distancia, hay papel
+            if (!oscuro(k, y - grosor - 1) && !oscuro(k, y + grosor + 1)) borrar.push(y * w + k);
+          }
+        }
+        ini = -1;
+      }
+    }
+  }
+  for (const p of borrar) {
+    for (let dy = -grosor; dy <= grosor; dy++) {
+      const q = (p + dy * w) * 4;
+      if (q >= 0 && q < d.length) d[q] = d[q + 1] = d[q + 2] = 255;
+    }
+  }
+  ctx.putImageData(datos, 0, 0);
+}
+
+/** Primera lectura: toda la página, para poder marcar las líneas con el dedo. */
+async function leerTextoDeFoto(dataURL) {
+  const t = await trabajador();
+  const img = await cargarImagen(dataURL);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  c.getContext('2d').drawImage(img, 0, 0);
+  limpiarParaLeer(c);
+  await t.setParameters({ tessedit_pageseg_mode: '3' });
+  const { data } = await t.recognize(c);
   return (data.lines || [])
     .map((l, i) => ({ id: i, texto: (l.text || '').trim(), caja: l.bbox }))
-    .filter(l => l.texto);
+    .filter(l => l.texto && l.caja);
+}
+
+/** Segunda lectura, solo de las líneas marcadas: recortadas, ampliadas y sin subrayados. */
+async function releerLineas(dataURL, lineas) {
+  if (!lineas.length) return '';
+  const t = await trabajador();
+  const img = await cargarImagen(dataURL);
+  const altos = lineas.map(l => l.caja.y1 - l.caja.y0).sort((a, b) => a - b);
+  const alto = Math.max(8, altos[Math.floor(altos.length / 2)]);
+  const margen = Math.round(alto * 0.8);
+  const x0 = Math.max(0, Math.min(...lineas.map(l => l.caja.x0)) - margen);
+  const y0 = Math.max(0, Math.min(...lineas.map(l => l.caja.y0)) - margen);
+  const x1 = Math.min(img.naturalWidth, Math.max(...lineas.map(l => l.caja.x1)) + margen);
+  const y1 = Math.min(img.naturalHeight, Math.max(...lineas.map(l => l.caja.y1)) + margen);
+  // Tesseract lee mejor con renglones de unos 40-50 píxeles de alto
+  const escala = Math.min(3, Math.max(1, 46 / alto));
+  const c = document.createElement('canvas');
+  c.width = Math.round((x1 - x0) * escala);
+  c.height = Math.round((y1 - y0) * escala);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+  limpiarParaLeer(c);
+  quitarSubrayados(c, alto * escala);
+  await t.setParameters({ tessedit_pageseg_mode: '6' });
+  try {
+    const { data } = await t.recognize(c);
+    const nuevas = (data.lines || []).map((l, i) => ({ id: i, texto: (l.text || '').trim() })).filter(l => l.texto);
+    return unirLineas(nuevas);
+  } finally {
+    await t.setParameters({ tessedit_pageseg_mode: '3' });
+  }
 }
 function unirLineas(lineas) {
   let r = '';
@@ -1474,7 +1592,11 @@ function ventanaCita(id, empezarMarcando = false) {
     cuerpo: `
       <label class="etiqueta-campo">Texto de la cita
         <textarea class="campo" id="cita-texto" rows="5" style="font-family:var(--f-titulo);font-size:16px" placeholder="Escríbela o sácala de la foto">${esc(c.texto)}</textarea></label>
-      ${c.imagen ? `<button type="button" class="boton" style="align-self:flex-start" data-accion="marcar-cita" data-id="${c.id}">${icono('texto')} ${c.texto ? 'Volver a marcar en la foto' : 'Sacar el texto de la foto'}</button>` : ''}
+      <div class="fila-campo" style="flex-wrap:wrap">
+        ${c.imagen ? `<button type="button" class="boton" data-accion="marcar-cita" data-id="${c.id}">${icono('texto')} ${c.texto ? 'Volver a marcar en la foto' : 'Sacar el texto de la foto'}</button>` : ''}
+        <button type="button" class="boton" data-accion="pegar-cita">${icono('pegar')} Pegar</button>
+      </div>
+      ${c.imagen && /iPhone|iPad/.test(navigator.userAgent) ? `<p class="nota-pequena">Truco: el iPhone lee el texto de las fotos muy bien. Abre la foto en la app Fotos, mantén el dedo sobre el texto, ajusta la selección, pulsa «Copiar» y luego «Pegar» aquí.</p>` : ''}
       <div class="seccion"><h2>Categoría <span class="espacio"></span><button type="button" class="boton plano" data-accion="categorias" style="text-transform:none;letter-spacing:0">${icono('paleta')} Editar</button></h2>
         <div class="chips-categoria" id="chips-cita">${chipsCategoria(c.categoria)}</div></div>
       <div class="dos">
@@ -1550,8 +1672,20 @@ function ventanaMarcar(id) {
   zona.addEventListener('pointercancel', () => { modo = null; });
   $('[data-accion="ocr-todo"]').onclick = () => { lineas.forEach(l => sel.add(l.id)); actualizar(); };
   $('[data-accion="ocr-nada"]').onclick = () => { sel.clear(); actualizar(); };
-  $('#usar-texto').onclick = () => {
-    c.texto = unirLineas(lineas.filter(l => sel.has(l.id)));
+  $('#usar-texto').onclick = async () => {
+    const elegidas = lineas.filter(l => sel.has(l.id));
+    const primera = unirLineas(elegidas);
+    const boton = $('#usar-texto');
+    boton.disabled = true;
+    boton.innerHTML = '<span class="cargando"></span> Afinando el texto…';
+    alProgresoOCR = null;
+    let texto = primera;
+    try {
+      const afinado = await releerLineas(c.imagen, elegidas);
+      // Si la segunda lectura sale muy distinta en longitud, algo ha ido mal: se queda la primera.
+      if (afinado && afinado.length > primera.length * 0.6 && afinado.length < primera.length * 1.5) texto = afinado;
+    } catch { /* se queda la primera lectura */ }
+    c.texto = texto;
     BD.poner('citas', c);
     ventanaCita(c.id);
   };
@@ -1724,6 +1858,18 @@ const acciones = {
     cerrarVentana();
     avisar('Cita borrada');
   },
+  'pegar-cita': async () => {
+    const area = $('#cita-texto');
+    try {
+      const t = (await navigator.clipboard.readText()).replace(/\s*\n\s*/g, ' ').replace(/(\p{Ll})- (\p{Ll})/gu, '$1$2').trim();
+      if (!t) { avisar('No hay texto copiado'); return; }
+      area.value = t;
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch {
+      avisar('Mantén el dedo en el cuadro de texto y elige «Pegar»');
+      area.focus();
+    }
+  },
   'copiar-cita': async b => {
     const c = E.citas.find(x => x.id === b.dataset.id);
     const l = libroPorId(c.libroId);
@@ -1857,7 +2003,7 @@ document.addEventListener('change', async e => {
     let ultima = null;
     for (const a of archivos) {
       try {
-        const c = { id: uid(), libroId: l.id, imagen: await comprimirImagen(a), pagina: l.paginaActual || 0, comentario: '', texto: '', categoria: -1, fecha: ahora() };
+        const c = { id: uid(), libroId: l.id, imagen: await comprimirImagen(a, 2200, 0.85), pagina: l.paginaActual || 0, comentario: '', texto: '', categoria: -1, fecha: ahora() };
         E.citas.push(c);
         await BD.poner('citas', c);
         ultima = c;

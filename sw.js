@@ -4,7 +4,7 @@
    - Portadas: se guardan al verlas, para que también se vean sin cobertura.
    - Las búsquedas de datos de libros no se guardan (necesitan red de verdad). */
 
-const VERSION = 'mislibros-app-v3';
+const VERSION = 'mislibros-app-v4';
 const EXTERNOS = 'mislibros-externos-v1';
 const IMAGENES = 'mislibros-portadas-v1';
 
