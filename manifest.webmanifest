@@ -1,0 +1,16 @@
+{
+  "name": "Mis Libros",
+  "short_name": "Mis Libros",
+  "description": "Tus libros, tus notas y tus subrayados.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#1f4f8c",
+  "icons": [
+    { "src": "icono-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icono-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

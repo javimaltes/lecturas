@@ -1,0 +1,50 @@
+MIS LIBROS (WEB) - CÓMO PUBLICARLA GRATIS EN GITHUB PAGES
+
+Son 7 archivos: index.html, app.js, sw.js, manifest.webmanifest e icono-180/192/512.png
+
+=== 1. CREAR EL REPOSITORIO (una sola vez) ===
+  github.com -> botón "+" (arriba a la derecha) -> New repository
+  Nombre: mislibros
+  Marca "Public" (GitHub Pages gratis solo funciona con repositorios públicos;
+  el CÓDIGO se puede ver, pero TUS LIBROS NO: se guardan en tu iPhone/ordenador).
+  Pulsa "Create repository".
+
+=== 2. SUBIR LOS ARCHIVOS ===
+  En la página del repositorio, pulsa "uploading an existing file".
+  Arrastra los 7 archivos (no hace falta este LEEME) y pulsa "Commit changes".
+
+=== 3. ENCENDER GITHUB PAGES ===
+  Pestaña "Settings" del repositorio -> en el menú de la izquierda "Pages".
+  En "Build and deployment" -> Source: "Deploy from a branch"
+  Branch: "main" y carpeta "/ (root)" -> "Save".
+  Espera 1 o 2 minutos y recarga: arriba aparecerá la dirección, algo como
+     https://TU_USUARIO.github.io/mislibros/
+
+=== 4. EN EL IPHONE ===
+  Abre esa dirección en Safari -> botón Compartir -> "Añadir a pantalla de inicio".
+  Úsala SIEMPRE desde ese icono: en el iPhone, Safari y el icono guardan los
+  datos por separado.
+  La primera vez que escanees, te pedirá permiso para la cámara: acepta.
+
+=== 5. EN EL ORDENADOR ===
+  Abre la misma dirección en Chrome, Edge o Safari. En Chrome/Edge puedes
+  instalarla como app con el icono de la barra de direcciones.
+
+=== SIN COBERTURA ===
+  Abre la app al menos una vez CON conexión: desde entonces se abre también sin red.
+  Sin conexión puedes escanear, pegar enlaces o escribir títulos: el libro se guarda
+  como "Pendiente de completar" y, cuando vuelve la cobertura, la app busca sola
+  sus datos y su portada (lo que hayas escrito tú no se toca).
+  Las fotos de citas también se guardan sin red. Para convertirlas en texto, el
+  lector necesita internet la primera vez que se usa; después suele funcionar sin red.
+
+=== IMPORTANTE: TUS DATOS ===
+  Cada dispositivo guarda sus propios libros. Para pasarlos del móvil al
+  ordenador (o al revés): botón del disquete -> "Guardar copia completa" en uno,
+  y "Elegir copia…" en el otro. Haz copias de vez en cuando (iCloud Drive o correo).
+
+=== ACTUALIZAR ===
+  Cuando te pase una versión nueva: en el repositorio, "Add file" ->
+  "Upload files", arrastra los archivos nuevos (reemplazan a los viejos) y
+  "Commit changes". En 1 o 2 minutos la web está actualizada; en el iPhone,
+  cierra la app y vuelve a abrirla. Nada de reinstalar ni de renovar cada 7 días.
