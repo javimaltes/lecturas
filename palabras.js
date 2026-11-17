@@ -126,11 +126,41 @@ const Palabras = (() => {
     return { lista: lista.slice(0, 4) };
   }
 
-  async function buscar(palabra, idioma) {
+  /** de.wiktionary.org: género (der/die/das) y plural de los sustantivos alemanes.
+   *  Si es una forma flexionada (p. ej. «Häuser»), devuelve la palabra base («Haus»). */
+  async function gramaticaAleman(palabra) {
+    const p = palabra.trim();
+    const formas = [...new Set([p.charAt(0).toUpperCase() + p.slice(1), p])];
+    for (const forma of formas) {
+      const r = await pedirJSON('https://de.wiktionary.org/w/api.php?action=parse&prop=wikitext&format=json&formatversion=2&origin=*&redirects=1&page=' + encodeURIComponent(forma));
+      if (r.error) return { error: r.error };
+      const wt = r.datos?.parse?.wikitext;
+      if (!wt) continue;
+      const ini = wt.search(/\(\{\{Sprache\|Deutsch\}\}\)/);
+      if (ini < 0) continue;
+      let seccion = wt.slice(ini);
+      const fin = seccion.search(/\n==\s[^=]/);
+      if (fin > 0) seccion = seccion.slice(0, fin);
+      if (/\{\{Wortart\|Substantiv\|Deutsch\}\}/.test(seccion)) {
+        const g = seccion.match(/\|\s*Genus(?:\s*1)?\s*=\s*([mfn])\b/) || seccion.match(/\{\{Wortart\|Substantiv\|Deutsch\}\}[^\n]*?\{\{([mfn])\}\}/);
+        const pl = seccion.match(/\|\s*Nominativ Plural(?:\s*1)?\s*=\s*([^\n|}]*)/);
+        let plural = pl ? limpiarWiki(pl[1]) : '';
+        if (/^[—–\-?]*$/.test(plural)) plural = '';
+        return { forma, sustantivo: true, genero: g ? g[1] : '', plural };
+      }
+      const base = seccion.match(/\{\{Grundformverweis[^|}]*\|([^|}]+)/);
+      if (base) return { forma, base: base[1].trim() };
+      return { forma, sustantivo: false };
+    }
+    return {};
+  }
+
+  async function buscar(palabra, idioma, opciones = {}) {
     palabra = palabra.trim();
     if (sinConexion()) return { palabra, idioma, traducciones: [], definiciones: [], sinRed: true };
     let defs;
     let trad = { lista: [] };
+    let gram = {};
     let definicionesEnIngles = false;
     if (idioma === 'es') {
       defs = await wiktionaryEspanol(palabra);
@@ -138,14 +168,26 @@ const Palabras = (() => {
         defs = await wiktionaryIngles(palabra, 'es');
         definicionesEnIngles = defs.defs.length > 0;
       }
+    } else if (idioma === 'de') {
+      [defs, trad, gram] = await Promise.all([wiktionaryIngles(palabra, 'de'), traducir(palabra, 'de'), gramaticaAleman(palabra)]);
+      // «Häuser» -> «Haus»: se busca la palabra base y se avisa
+      if (gram.base && gram.base.toLowerCase() !== palabra.toLowerCase() && !opciones.sinBase) {
+        const r = await buscar(gram.base, 'de', { sinBase: true });
+        if (r.definiciones.length || r.traducciones.length) return { ...r, desde: palabra };
+      }
     } else {
       [defs, trad] = await Promise.all([wiktionaryIngles(palabra, idioma), traducir(palabra, idioma)]);
     }
     const nada = !defs.defs.length && !trad.lista.length;
     const sinRed = nada && ERRORES_RED.includes(defs.error) && (idioma === 'es' || ERRORES_RED.includes(trad.error));
+    let forma = palabra;
+    if (idioma === 'de') {
+      if (gram.sustantivo && gram.forma) forma = gram.forma;
+      else if (defs.forma && defs.forma.toLowerCase() === palabra.toLowerCase()) forma = defs.forma;
+    }
     return {
-      palabra: idioma === 'de' && defs.forma && defs.forma !== palabra && defs.forma.toLowerCase() === palabra.toLowerCase() ? defs.forma : palabra,
-      idioma, traducciones: trad.lista, definiciones: defs.defs, definicionesEnIngles, sinRed,
+      palabra: forma, idioma, traducciones: trad.lista, definiciones: defs.defs, definicionesEnIngles, sinRed,
+      ...(idioma === 'de' ? { genero: gram.genero || '', plural: gram.plural || '', generoBuscado: !gram.error && !sinRed } : {}),
     };
   }
 
@@ -154,6 +196,7 @@ const Palabras = (() => {
     return {
       id: uid(), libroId: libroId || '', palabra: r.palabra, idioma: r.idioma,
       traducciones: r.traducciones || [], definiciones: r.definiciones || [], definicionesEnIngles: !!r.definicionesEnIngles,
+      ...(r.idioma === 'de' ? { genero: r.genero || '', plural: r.plural || '', generoBuscado: !!r.generoBuscado } : {}),
       frase: frase || '', pagina: pagina || 0, nota: '', caja: 0, proxima: ahora(), aciertos: 0, fallos: 0, fecha: ahora(),
       ...(r.sinRed ? { pendiente: true } : {}),
     };
@@ -208,6 +251,7 @@ const Palabras = (() => {
       if (r.sinRed) break;
       if (!p.traducciones?.length) p.traducciones = r.traducciones;
       if (!p.definiciones?.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
+      if (r.idioma === 'de') Object.assign(p, { palabra: r.palabra, genero: r.genero, plural: r.plural, generoBuscado: r.generoBuscado });
       delete p.pendiente;
       await guardar(p);
       hechas++;
@@ -220,6 +264,13 @@ const Palabras = (() => {
   }
 
   // ---------- Trozos de pantalla ----------
+  const ARTICULOS = { m: 'der', f: 'die', n: 'das' };
+  const articulo = p => (p.idioma === 'de' && ARTICULOS[p.genero] ? `<span class="art art-${p.genero}">${ARTICULOS[p.genero]}</span> ` : '');
+  const articuloTexto = p => (p.idioma === 'de' && ARTICULOS[p.genero] ? ARTICULOS[p.genero] + ' ' : '');
+  function lineaPlural(p) {
+    if (p.idioma !== 'de' || !p.genero) return '';
+    return p.plural ? `Plural: <span class="art art-f">die</span> ${esc(p.plural)}` : 'Sin plural';
+  }
   const insignia = idioma => `<span class="insignia-idioma" title="${esc(IDIOMAS[idioma]?.nombre || '')}">${esc(IDIOMAS[idioma]?.corto || idioma)}</span>`;
   const botonHablar = (texto, idioma) => puedeHablar()
     ? `<button type="button" class="boton icono-solo plano" data-accion="hablar" data-texto="${esc(texto)}" data-idioma="${idioma}" aria-label="Escuchar">${icono('altavoz')}</button>` : '';
@@ -266,7 +317,8 @@ const Palabras = (() => {
         </select>` : ''}
       </div>
       <div id="banda-repaso"></div>
-      <div class="fila-campo"><button type="button" class="boton" data-accion="buscar-palabra" data-libro="${esc(filtro.libro)}">${icono('mas')} Buscar una palabra</button></div>
+      <div class="fila-campo" style="flex-wrap:wrap"><button type="button" class="boton" data-accion="buscar-palabra" data-libro="${esc(filtro.libro)}">${icono('mas')} Buscar una palabra</button>
+        ${E.palabras.length ? `<button type="button" class="boton" data-accion="abrir-exportar">${icono('descargar')} Llevar a Anki o Quizlet</button>` : ''}</div>
       <p class="contador" id="contador-palabras"></p>
       <div class="lista" id="lista-palabras"></div>`;
     pintarLista();
@@ -296,7 +348,7 @@ const Palabras = (() => {
       const l = libroPorId(p.libroId);
       return `<button type="button" class="fila fila-palabra" data-accion="ver-palabra" data-id="${p.id}">
         <span class="fila-texto">
-          <span class="fila-titulo">${esc(p.palabra)} ${insignia(p.idioma)}</span>
+          <span class="fila-titulo">${articulo(p)}${esc(p.palabra)} ${insignia(p.idioma)}</span>
           <span class="fila-autor">${esc(resumenSignificado(p))}</span>
           <span class="fila-meta"><span>${esc(l ? tituloVisible(l) : 'Sin libro')}${p.pagina ? ' · p. ' + p.pagina : ''}</span><span>${cajitas(p)} ${esc(cuandoToca(p))}</span></span>
         </span></button>`;
@@ -341,7 +393,9 @@ const Palabras = (() => {
       html = `<div class="consejo">${icono('buscar')}<p>No encuentro «${esc(palabra)}» en ${esc(IDIOMAS[idiomaBusqueda].nombre.toLowerCase())}. ¿Está bien escrita y en el idioma correcto? Si es una forma conjugada, prueba con el infinitivo. Puedes guardarla igualmente y escribir tú la traducción.</p></div>`;
     } else {
       html = `<div class="tarjeta-resultado">
-        <div class="cab-resultado"><b class="palabra-grande">${esc(r.palabra)}</b>${insignia(r.idioma)}${botonHablar(r.palabra, r.idioma)}</div>
+        ${r.desde ? `<p class="nota-pequena">Has buscado «${esc(r.desde)}»: es una forma de esta palabra.</p>` : ''}
+        <div class="cab-resultado"><b class="palabra-grande">${articulo(r)}${esc(r.palabra)}</b>${insignia(r.idioma)}${botonHablar(articuloTexto(r) + r.palabra, r.idioma)}</div>
+        ${lineaPlural(r) ? `<p class="ayuda" style="margin:0">${lineaPlural(r)}</p>` : ''}
         ${r.traducciones.length ? `<p class="traduccion">${esc(r.traducciones.join(', '))}</p>` : ''}
         ${r.definiciones.length ? `<ol class="definiciones">${r.definiciones.slice(0, 4).map(d => `<li>${d.tipo ? `<i>${esc(d.tipo)}</i> ` : ''}${esc(d.texto)}${d.ejemplo ? `<small>${esc(d.ejemplo)}</small>` : ''}</li>`).join('')}</ol>` : ''}
         ${r.definicionesEnIngles ? '<p class="nota-pequena">Definiciones en inglés (no la he encontrado en el diccionario en español).</p>' : (r.idioma !== 'es' && r.definiciones.length ? '<p class="nota-pequena">Definiciones en inglés, de Wiktionary.</p>' : '')}
@@ -371,7 +425,8 @@ const Palabras = (() => {
     abrirVentana({
       titulo: 'Tarjeta',
       cuerpo: `
-        <div class="cab-resultado"><b class="palabra-grande">${esc(p.palabra)}</b>${insignia(p.idioma)}${botonHablar(p.palabra, p.idioma)}</div>
+        <div class="cab-resultado"><b class="palabra-grande">${articulo(p)}${esc(p.palabra)}</b>${insignia(p.idioma)}${botonHablar(articuloTexto(p) + p.palabra, p.idioma)}</div>
+        ${lineaPlural(p) ? `<p class="ayuda" style="margin:0">${lineaPlural(p)}</p>` : ''}
         ${p.pendiente ? `<div class="consejo">${icono('nube')}<p>Guardada sin conexión: buscaré su significado cuando vuelva la cobertura.</p></div>` : ''}
         <label class="etiqueta-campo">${p.idioma === 'es' ? 'Significado (lo que verás al girar la tarjeta)' : 'Traducción (separa varias con comas)'}
           <input class="campo" id="p-traduccion" value="${esc((p.traducciones || []).join(', '))}" placeholder="${p.idioma === 'es' ? 'Opcional: tus propias palabras' : 'Escribe la traducción'}"></label>
@@ -398,103 +453,374 @@ const Palabras = (() => {
     ['#p-traduccion', '#p-frase', '#p-nota', '#p-pagina'].forEach(s => $(s).addEventListener('input', guardarCampos));
   }
 
-  // ---------- Ventana: repaso ----------
-  function ventanaRepaso(libroId, idioma) {
-    let ambito = E.palabras.filter(p => (!libroId || p.libroId === libroId) && (!idioma || p.idioma === idioma));
+  // ---------- Repaso: opciones ----------
+  const MODOS = {
+    ver: { nombre: 'Ver y recordar', nota: 'Ves la palabra y piensas qué significa' },
+    reves: { nombre: 'Al revés', nota: 'Ves el significado y piensas la palabra' },
+    escribir: { nombre: 'Escribir', nota: 'Ves el significado y escribes la palabra' },
+    genero: { nombre: 'der, die, das', nota: 'Eliges el artículo de los sustantivos alemanes' },
+  };
+  const QUE = { hoy: 'Las de hoy', todas: 'Todas', dificiles: 'Las difíciles', nuevas: 'Las nuevas' };
+  const OPCIONES_INICIALES = { que: 'hoy', modo: 'ver', cuantas: '20', voz: false };
+  function opcionesGuardadas() {
+    try { return { ...OPCIONES_INICIALES, ...JSON.parse(ajuste.leer('opcionesRepaso') || '{}') }; } catch { return { ...OPCIONES_INICIALES }; }
+  }
+  const esDificil = p => (p.fallos || 0) > 0 && (p.caja || 0) <= 2;
+  const esNueva = p => !(p.aciertos || 0) && !(p.fallos || 0);
+  const esSustantivoAleman = p => p.idioma === 'de' && !!ARTICULOS[p.genero];
+  function seleccion(ambito, que, modo) {
+    let l = modo === 'genero' ? ambito.filter(esSustantivoAleman) : ambito;
+    if (que === 'hoy') l = pendientesDeRepaso(l);
+    if (que === 'dificiles') l = l.filter(esDificil);
+    if (que === 'nuevas') l = l.filter(esNueva);
+    return l;
+  }
+
+  // ---------- Estadísticas ----------
+  const hoyClave = (d = new Date()) => d.toLocaleDateString('sv-SE'); // AAAA-MM-DD en hora local
+  function registro() {
+    try { return JSON.parse(ajuste.leer('registroRepaso') || '{}'); } catch { return {}; }
+  }
+  function anotarRepaso(n) {
+    const r = registro();
+    r[hoyClave()] = (r[hoyClave()] || 0) + n;
+    ajuste.guardar('registroRepaso', JSON.stringify(r));
+  }
+  function racha() {
+    const r = registro();
+    const d = new Date();
+    if (!r[hoyClave(d)]) d.setDate(d.getDate() - 1); // si hoy aún no has repasado, cuenta hasta ayer
+    let n = 0;
+    while (r[hoyClave(d)]) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+  }
+  function estadisticasHTML(ambito) {
+    const dominadas = ambito.filter(p => (p.caja || 0) >= 4).length;
+    const nuevas = ambito.filter(esNueva).length;
+    const aprendiendo = ambito.length - dominadas - nuevas;
+    const r = racha();
+    const hoy = registro()[hoyClave()] || 0;
+    const aciertos = ambito.reduce((a, p) => a + (p.aciertos || 0), 0);
+    const intentos = aciertos + ambito.reduce((a, p) => a + (p.fallos || 0), 0);
+    return `<div class="seccion"><h2>Tu progreso</h2>
+      <div class="estadisticas">
+        <div><b>${r}</b><small>${r === 1 ? 'día seguido' : 'días seguidos'}</small></div>
+        <div><b>${hoy}</b><small>repasadas hoy</small></div>
+        <div><b>${dominadas}</b><small>dominadas</small></div>
+        <div><b>${aprendiendo}</b><small>aprendiendo</small></div>
+        <div><b>${nuevas}</b><small>nuevas</small></div>
+        <div><b>${intentos ? Math.round(aciertos / intentos * 100) + ' %' : '—'}</b><small>aciertos</small></div>
+      </div>
+      <div class="barra-niveles" title="Dominadas, aprendiendo y nuevas">
+        <i class="dominadas" style="flex:${dominadas}"></i><i class="aprendiendo" style="flex:${aprendiendo}"></i><i class="nuevas" style="flex:${nuevas}"></i>
+      </div></div>`;
+  }
+
+  let ambitoRepaso = { libroId: '', idioma: '' };
+  function ventanaOpcionesRepaso(libroId, idioma) {
+    ambitoRepaso = { libroId: libroId || '', idioma: idioma || '' };
+    const ambito = E.palabras.filter(p => (!ambitoRepaso.libroId || p.libroId === ambitoRepaso.libroId) && (!ambitoRepaso.idioma || p.idioma === ambitoRepaso.idioma));
     if (!ambito.length) { avisar('No hay palabras que repasar'); return; }
-    let cola = pendientesDeRepaso(ambito);
-    const practica = !cola.length;
-    if (practica) cola = [...ambito];
+    const o = opcionesGuardadas();
+    const hayGenero = ambito.some(esSustantivoAleman);
+    if (o.modo === 'genero' && !hayGenero) o.modo = 'ver';
+    const l = libroPorId(ambitoRepaso.libroId);
+    abrirVentana({
+      titulo: l ? 'Repasar: ' + tituloVisible(l) : 'Repasar palabras',
+      cuerpo: `
+        <div class="seccion"><h2>Qué tarjetas</h2>
+          <div class="opciones-repaso">${Object.entries(QUE).map(([k, t]) => {
+            const n = seleccion(ambito, k, o.modo).length;
+            return `<button type="button" data-accion="opcion-repaso" data-grupo="que" data-valor="${k}" aria-pressed="${o.que === k}" ${n ? '' : 'class="vacia"'}><b>${n}</b><small>${t}</small></button>`;
+          }).join('')}</div></div>
+        <div class="seccion"><h2>Cómo</h2>
+          <div class="estados">${Object.entries(MODOS).filter(([k]) => k !== 'genero' || hayGenero).map(([k, m]) => `<button type="button" class="estado" data-accion="opcion-repaso" data-grupo="modo" data-valor="${k}" aria-pressed="${o.modo === k}"><span><b>${m.nombre}</b><small>${m.nota}</small></span></button>`).join('')}</div></div>
+        <div class="seccion"><h2>Cuántas como máximo</h2>
+          <div class="segmentos" style="grid-template-columns:repeat(4,1fr)">${['10', '20', '50', 'todas'].map(k => `<button type="button" data-accion="opcion-repaso" data-grupo="cuantas" data-valor="${k}" aria-pressed="${o.cuantas === k}">${k === 'todas' ? 'Todas' : k}</button>`).join('')}</div></div>
+        ${puedeHablar() ? `<label class="interruptor"><input type="checkbox" id="opcion-voz" ${o.voz ? 'checked' : ''}> Leer cada palabra en voz alta</label>` : ''}
+        ${estadisticasHTML(ambito)}`,
+      pie: `<span class="espacio"></span><button type="button" class="boton principal grande" data-accion="empezar-repaso">Empezar</button>`,
+    });
+    $('#opcion-voz')?.addEventListener('change', e => {
+      const x = opcionesGuardadas();
+      x.voz = e.target.checked;
+      ajuste.guardar('opcionesRepaso', JSON.stringify(x));
+    });
+  }
+
+  function empezarRepaso() {
+    const o = opcionesGuardadas();
+    const ambito = E.palabras.filter(p => (!ambitoRepaso.libroId || p.libroId === ambitoRepaso.libroId) && (!ambitoRepaso.idioma || p.idioma === ambitoRepaso.idioma));
+    let lista = seleccion(ambito, o.que, o.modo);
+    if (!lista.length) {
+      avisar(o.que === 'hoy' ? 'Hoy no te toca ninguna: elige «Todas» o «Las difíciles»' : 'No hay tarjetas de ese tipo');
+      return;
+    }
     // las más atrasadas primero, con algo de mezcla
-    cola.sort((a, b) => String(a.proxima).localeCompare(String(b.proxima)));
-    cola = cola.map((p, i) => ({ p, k: i + Math.random() * 4 })).sort((a, b) => a.k - b.k).map(x => x.p).slice(0, 40);
+    lista = [...lista].sort((a, b) => String(a.proxima).localeCompare(String(b.proxima)))
+      .map((p, i) => ({ p, k: i + Math.random() * 4 })).sort((a, b) => a.k - b.k).map(x => x.p);
+    if (o.cuantas !== 'todas') lista = lista.slice(0, parseInt(o.cuantas, 10));
+    sesionRepaso(lista, o);
+  }
+
+  // ---------- Repaso: la sesión ----------
+  const quitarAcentos = t => t.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  function normalizar(t, idioma) {
+    let s = String(t || '').trim().toLowerCase().replace(/[.,;:!?¡¿"'«»()]/g, '').replace(/\s+/g, ' ');
+    s = s.replace(/^(der|die|das|the|a|an|to|el|la|los|las|un|una)\s+/, '');
+    if (idioma === 'de') s = s.replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+    return s;
+  }
+  function distancia(a, b) {
+    const m = a.length;
+    const n = b.length;
+    const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+    for (let j = 1; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+    }
+    return d[m][n];
+  }
+  /** Compara lo escrito con la palabra: 'bien', 'casi' (acentos o una letra) o 'mal'. */
+  function comprobar(escrito, p) {
+    const a = normalizar(escrito, p.idioma);
+    const b = normalizar(p.palabra, p.idioma);
+    if (!a) return 'mal';
+    if (a === b) return 'bien';
+    if (quitarAcentos(a) === quitarAcentos(b)) return 'casi';
+    if (b.length >= 5 && distancia(a, b) === 1) return 'casi';
+    return 'mal';
+  }
+  function fraseOculta(frase, palabra) {
+    if (!frase) return '';
+    const patron = palabra.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try { return esc(frase).replace(new RegExp(patron, 'gi'), '<span class="hueco">_____</span>'); } catch { return esc(frase); }
+  }
+
+  function sesionRepaso(lista, o) {
+    let cola = [...lista];
     const total = cola.length;
     const vueltas = new Map();
     const cuenta = { bien: 0, dificil: 0, otra: 0 };
-    let actual = null;
-    let girada = false;
+    let fase = 'pregunta'; // pregunta | respuesta
+    let resultado = null; // para «escribir» y «der, die, das»
+    let escrito = '';
+    let anotadas = 0;
+
+    const significadoHTML = p => `
+      <span class="traduccion">${esc(resumenSignificado(p))}</span>
+      ${p.definiciones?.length && p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[0].texto)}</span>` : ''}
+      ${p.definiciones?.length > 1 && !p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[1].texto)}</span>` : ''}`;
+    const palabraHTML = (p, conArticulo) => `<b class="palabra-tarjeta">${conArticulo ? articulo(p) : ''}${esc(p.palabra)}</b>
+      ${conArticulo && lineaPlural(p) ? `<span class="nota-pequena">${lineaPlural(p)}</span>` : ''}`;
+    const pie = p => {
+      const l = libroPorId(p.libroId);
+      return `<span class="nota-pequena">${esc(l ? tituloVisible(l) : '')}${p.pagina ? ' · p. ' + p.pagina : ''}</span>`;
+    };
+    const decir = p => { if (o.voz) hablar(articuloTexto(p) + p.palabra, p.idioma); };
 
     const pintar = () => {
       const cuerpo = $('#ventana-cuerpo');
+      const piePag = $('#ventana-pie');
       if (!cuerpo) return;
-      if (!cola.length) {
-        const hechas = cuenta.bien + cuenta.dificil + cuenta.otra;
-        cuerpo.innerHTML = `<div class="vacio">${icono('tarjetas', 'grande-icono')}<h2>¡Repaso terminado!</h2>
-          <p>${hechas === 1 ? '1 respuesta' : hechas + ' respuestas'}: ${cuenta.bien} bien, ${cuenta.dificil === 1 ? '1 difícil' : cuenta.dificil + ' difíciles'}, ${cuenta.otra} para repetir.</p>
-          <p class="ayuda">Las que sabías volverán más adelante; las difíciles, mañana.</p></div>`;
-        $('#ventana-pie').innerHTML = `<span class="espacio"></span><button type="button" class="boton principal" data-accion="cerrar-ventana">Cerrar</button>`;
-        return;
-      }
-      actual = cola[0];
-      const p = actual;
-      const l = libroPorId(p.libroId);
+      if (!cola.length) return terminar();
+      const p = cola[0];
       const hecho = total - cola.length;
-      cuerpo.innerHTML = `
-        <div class="progreso-repaso"><span style="width:${Math.round(hecho / total * 100)}%"></span></div>
-        <p class="ayuda" style="text-align:center">${practica ? 'Práctica libre · ' : ''}${hecho + 1} de ${total}${vueltas.get(p.id) ? ' · otra vez' : ''}</p>
-        <button type="button" class="tarjeta-flash ${girada ? 'girada' : ''}" data-accion="girar-tarjeta">
-          <span class="cara">
-            ${insignia(p.idioma)}
-            <b class="palabra-tarjeta">${esc(p.palabra)}</b>
-            ${p.frase ? `<span class="frase-tarjeta">${fraseMarcada(p.frase, p.palabra)}</span>` : ''}
-            ${!girada ? '<span class="nota-pequena">Toca para ver la respuesta</span>' : ''}
-          </span>
-          ${girada ? `<span class="reverso">
-            <span class="traduccion">${esc(resumenSignificado(p))}</span>
-            ${p.definiciones?.length && p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[0].texto)}</span>` : ''}
-            ${p.definiciones?.length > 1 && !p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[1].texto)}</span>` : ''}
-            ${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}
-            <span class="nota-pequena">${esc(l ? tituloVisible(l) : '')}${p.pagina ? ' · p. ' + p.pagina : ''}</span>
-          </span>` : ''}
-        </button>
-        ${puedeHablar() ? `<div style="text-align:center">${botonHablar(p.palabra, p.idioma)}</div>` : ''}`;
-      $('#ventana-pie').innerHTML = girada
-        ? `<div class="botones-nota">
-            <button type="button" class="boton nota-otra" data-accion="nota-repaso" data-nota="otra"><b>Otra vez</b><small>No me la sabía</small></button>
-            <button type="button" class="boton nota-dificil" data-accion="nota-repaso" data-nota="dificil"><b>Difícil</b><small>Mañana</small></button>
-            <button type="button" class="boton nota-bien" data-accion="nota-repaso" data-nota="bien"><b>Bien</b><small>${esc(proximoSiBien(p))}</small></button>
-          </div>`
-        : `<button type="button" class="boton principal grande" style="flex:1" data-accion="girar-tarjeta">Ver respuesta</button>`;
+      const cabecera = `<div class="progreso-repaso"><span style="width:${Math.round(hecho / total * 100)}%"></span></div>
+        <p class="ayuda" style="text-align:center">${MODOS[o.modo].nombre} · ${hecho + 1} de ${total}${vueltas.get(p.id) ? ' · otra vez' : ''}</p>`;
+      let cara = '';
+      let reverso = '';
+      if (o.modo === 'ver') {
+        cara = `${insignia(p.idioma)}${palabraHTML(p, false)}${p.frase ? `<span class="frase-tarjeta">${fraseMarcada(p.frase, p.palabra)}</span>` : ''}`;
+        reverso = `${p.idioma === 'de' && p.genero ? palabraHTML(p, true) : ''}${significadoHTML(p)}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
+      } else if (o.modo === 'reves' || o.modo === 'escribir') {
+        cara = `${insignia(p.idioma)}${significadoHTML(p)}${p.frase ? `<span class="frase-tarjeta">${fraseOculta(p.frase, p.palabra)}</span>` : ''}`;
+        reverso = `${palabraHTML(p, true)}${resultado && o.modo === 'escribir' ? `<span class="veredicto ${resultado}">${resultado === 'bien' ? '¡Correcto!' : resultado === 'casi' ? `Casi: escribiste «${esc(escrito)}»` : `Escribiste «${esc(escrito || '—')}»`}</span>` : ''}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
+      } else {
+        cara = `${insignia(p.idioma)}<b class="palabra-tarjeta">${esc(p.palabra)}</b><span class="def-tarjeta">${esc(resumenSignificado(p))}</span>`;
+        reverso = `${palabraHTML(p, true)}<span class="veredicto ${resultado}">${resultado === 'bien' ? '¡Correcto!' : 'Era ' + ARTICULOS[p.genero]}</span>`;
+      }
+      const respondida = fase === 'respuesta';
+      cuerpo.innerHTML = `${cabecera}
+        <div class="tarjeta-flash ${respondida ? 'girada' : ''}" ${o.modo === 'ver' || o.modo === 'reves' ? 'role="button" tabindex="0" data-accion="girar-tarjeta"' : ''}>
+          <span class="cara">${cara}${!respondida && (o.modo === 'ver' || o.modo === 'reves') ? '<span class="nota-pequena">Toca para ver la respuesta</span>' : ''}</span>
+          ${respondida ? `<span class="reverso">${reverso}</span>` : ''}
+        </div>
+        ${o.modo === 'escribir' && !respondida ? `<form class="fila-campo" id="form-escribir"><input class="campo" id="respuesta-escrita" placeholder="Escribe la palabra" autocomplete="off" autocapitalize="off" spellcheck="false" lang="${p.idioma}" enterkeyhint="done"><button class="boton principal" type="submit">Comprobar</button></form>` : ''}
+        ${puedeHablar() && respondida ? `<div style="text-align:center">${botonHablar(articuloTexto(p) + p.palabra, p.idioma)}</div>` : ''}`;
+
+      if (o.modo === 'genero') {
+        piePag.innerHTML = respondida
+          ? `<span class="espacio"></span><button type="button" class="boton principal grande" data-accion="siguiente-genero">Siguiente</button>`
+          : `<div class="botones-genero">${['m', 'f', 'n'].map(g => `<button type="button" class="boton art-boton art-${g}" data-accion="elegir-genero" data-genero="${g}">${ARTICULOS[g]}</button>`).join('')}</div>`;
+      } else if (!respondida) {
+        piePag.innerHTML = o.modo === 'escribir'
+          ? `<button type="button" class="boton plano" data-accion="no-lo-se">No lo sé</button><span class="espacio"></span>`
+          : `<button type="button" class="boton principal grande" style="flex:1" data-accion="girar-tarjeta">Ver respuesta</button>`;
+      } else {
+        const sugerida = o.modo === 'escribir' ? { bien: 'bien', casi: 'dificil', mal: 'otra' }[resultado] : '';
+        piePag.innerHTML = `<div class="botones-nota">
+          <button type="button" class="boton nota-otra ${sugerida === 'otra' ? 'sugerida' : ''}" data-accion="nota-repaso" data-nota="otra"><b>Otra vez</b><small>No me la sabía</small></button>
+          <button type="button" class="boton nota-dificil ${sugerida === 'dificil' ? 'sugerida' : ''}" data-accion="nota-repaso" data-nota="dificil"><b>Difícil</b><small>Mañana</small></button>
+          <button type="button" class="boton nota-bien ${sugerida === 'bien' ? 'sugerida' : ''}" data-accion="nota-repaso" data-nota="bien"><b>Bien</b><small>${esc(proximoSiBien(p))}</small></button>
+        </div>`;
+      }
+      if (o.modo === 'escribir' && !respondida) {
+        const i = $('#respuesta-escrita');
+        $('#form-escribir').addEventListener('submit', e => { e.preventDefault(); escribirRespuesta(i.value); });
+        i.focus();
+      }
+      if (!respondida && (o.modo === 'ver' || o.modo === 'genero')) decir(p);
+      if (respondida && (o.modo === 'reves' || o.modo === 'escribir')) decir(p);
     };
+
     const proximoSiBien = p => {
       const d = INTERVALOS[Math.min(INTERVALOS.length - 1, (p.caja || 0) + 1)];
       return d === 1 ? 'Mañana' : `En ${d} días`;
     };
-
-    abrirVentana({
-      titulo: libroId ? 'Repasar: ' + tituloVisible(libroPorId(libroId) || { titulo: '' }) : 'Repasar palabras',
-      cuerpo: '',
-      pie: ' ',
-      alCerrar: () => { document.removeEventListener('keydown', teclas); if (E.vista === 'palabras') pintarColumna(); else pintarFicha(); },
-    });
-    const teclas = e => {
-      if (e.target.closest('input, textarea')) return;
-      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!girada) { girada = true; pintar(); } }
-      if (girada && ['1', '2', '3'].includes(e.key)) responder({ 1: 'otra', 2: 'dificil', 3: 'bien' }[e.key]);
+    const girar = () => {
+      if (o.modo !== 'ver' && o.modo !== 'reves') return;
+      fase = fase === 'pregunta' ? 'respuesta' : 'pregunta';
+      pintar();
     };
-    document.addEventListener('keydown', teclas);
+    const escribirRespuesta = texto => {
+      escrito = texto.trim();
+      resultado = comprobar(escrito, cola[0]);
+      fase = 'respuesta';
+      pintar();
+    };
     const responder = nota => {
       const p = cola.shift();
       calificar(p, nota);
+      p.ultimoRepaso = ahora();
       cuenta[nota]++;
+      anotadas++;
       if (nota === 'otra' && (vueltas.get(p.id) || 0) < 2) {
         vueltas.set(p.id, (vueltas.get(p.id) || 0) + 1);
         cola.splice(Math.min(cola.length, 3), 0, p); // vuelve a salir dentro de poco
       }
-      girada = false;
+      fase = 'pregunta';
+      resultado = null;
+      escrito = '';
       pintar();
     };
-    Palabras._responder = responder;
-    Palabras._girar = () => { girada = !girada; pintar(); };
+    const elegirGenero = g => {
+      const p = cola[0];
+      resultado = g === p.genero ? 'bien' : 'mal';
+      p.generoAciertos = (p.generoAciertos || 0) + (resultado === 'bien' ? 1 : 0);
+      p.generoFallos = (p.generoFallos || 0) + (resultado === 'bien' ? 0 : 1);
+      guardar(p);
+      cuenta[resultado === 'bien' ? 'bien' : 'otra']++;
+      anotadas++;
+      fase = 'respuesta';
+      pintar();
+    };
+    const siguienteGenero = () => {
+      const p = cola.shift();
+      if (resultado === 'mal' && (vueltas.get(p.id) || 0) < 1) {
+        vueltas.set(p.id, 1);
+        cola.splice(Math.min(cola.length, 3), 0, p);
+      }
+      fase = 'pregunta';
+      resultado = null;
+      pintar();
+    };
+    const terminar = () => {
+      const hechas = cuenta.bien + cuenta.dificil + cuenta.otra;
+      if (anotadas) anotarRepaso(anotadas);
+      anotadas = 0;
+      const r = racha();
+      $('#ventana-cuerpo').innerHTML = `<div class="vacio">${icono('tarjetas', 'grande-icono')}<h2>¡Repaso terminado!</h2>
+        <p>${o.modo === 'genero'
+          ? `${cuenta.bien} de ${hechas} artículos acertados.`
+          : `${hechas === 1 ? '1 respuesta' : hechas + ' respuestas'}: ${cuenta.bien} bien, ${cuenta.dificil === 1 ? '1 difícil' : cuenta.dificil + ' difíciles'}, ${cuenta.otra} para repetir.`}</p>
+        ${r > 1 ? `<p><b>${r} días seguidos</b> repasando.</p>` : ''}
+        <p class="ayuda">${o.modo === 'genero' ? 'La práctica de artículos no cambia cuándo te toca cada tarjeta.' : 'Las que sabías volverán más adelante; las difíciles, mañana.'}</p></div>`;
+      $('#ventana-pie').innerHTML = `<button type="button" class="boton" data-accion="repasar" data-libro="${esc(ambitoRepaso.libroId)}" data-idioma="${esc(ambitoRepaso.idioma)}">Otro repaso</button>
+        <span class="espacio"></span><button type="button" class="boton principal" data-accion="cerrar-ventana">Cerrar</button>`;
+    };
+
+    const teclas = e => {
+      if (e.target.closest('input, textarea')) return;
+      if (o.modo === 'genero') {
+        if (fase === 'pregunta' && ['1', '2', '3'].includes(e.key)) elegirGenero({ 1: 'm', 2: 'f', 3: 'n' }[e.key]);
+        else if (fase === 'respuesta' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); siguienteGenero(); }
+        return;
+      }
+      if (fase === 'pregunta' && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); girar(); return; }
+      if (fase === 'respuesta' && ['1', '2', '3'].includes(e.key)) responder({ 1: 'otra', 2: 'dificil', 3: 'bien' }[e.key]);
+    };
+    abrirVentana({
+      titulo: 'Repaso',
+      cuerpo: '',
+      pie: ' ',
+      alCerrar: () => {
+        document.removeEventListener('keydown', teclas);
+        if (anotadas) anotarRepaso(anotadas);
+        Palabras._sesion = null;
+        if (E.vista === 'palabras') pintarColumna(); else pintarFicha();
+      },
+    });
+    document.addEventListener('keydown', teclas);
+    Palabras._sesion = { girar, responder, elegirGenero, siguienteGenero, noLoSe: () => escribirRespuesta('') };
     pintar();
   }
 
-  // ---------- Exportar para Anki ----------
+  // ---------- Exportar ----------
+  const textoFrente = p => articuloTexto(p) + p.palabra;
+  function textoReverso(p, html) {
+    const partes = [(p.traducciones || []).join(', ') || p.definiciones?.[0]?.texto || ''];
+    if (p.idioma === 'de' && p.genero) partes.push(p.plural ? 'Plural: die ' + p.plural : 'Sin plural');
+    if (p.traducciones?.length && p.definiciones?.[0]) partes.push(p.definiciones[0].texto);
+    if (p.frase) partes.push(html ? `<i>${esc(p.frase)}</i>` : p.frase);
+    return partes.filter(Boolean).join(html ? '<br>' : ' — ');
+  }
   function csvAnki() {
     return csv([
       ['Palabra', 'Significado', 'Definición', 'Frase', 'Libro', 'Idioma'],
-      ...E.palabras.map(p => [p.palabra, (p.traducciones || []).join(', '), p.definiciones?.[0]?.texto || '', p.frase, tituloVisible(libroPorId(p.libroId) || { titulo: '' }), IDIOMAS[p.idioma]?.nombre || p.idioma]),
+      ...E.palabras.map(p => [textoFrente(p), (p.traducciones || []).join(', '), p.definiciones?.[0]?.texto || '', p.frase, tituloVisible(libroPorId(p.libroId) || { titulo: '' }), IDIOMAS[p.idioma]?.nombre || p.idioma]),
     ]);
+  }
+  /** Archivo de texto que Anki importa directamente (Archivo → Importar). */
+  function txtAnki(lista) {
+    const limpia = t => String(t || '').replace(/[\t\r\n]+/g, ' ');
+    const etiqueta = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w-]+/g, '_').replace(/^_|_$/g, '');
+    const lineas = ['#separator:tab', '#html:true', '#columns:Frente\tReverso\tEtiquetas', '#tags column:3'];
+    for (const p of lista) {
+      const l = libroPorId(p.libroId);
+      const tags = ['MisLibros', IDIOMAS[p.idioma]?.nombre || p.idioma, l ? etiqueta(tituloVisible(l)) : ''].filter(Boolean).join(' ');
+      lineas.push([limpia(esc(textoFrente(p))), limpia(textoReverso(p, true)), tags].join('\t'));
+    }
+    return lineas.join('\n') + '\n';
+  }
+  /** Texto para pegar en Quizlet (Crear → Importar): término, tabulador, definición. */
+  function textoQuizlet(lista) {
+    return lista.map(p => `${textoFrente(p)}\t${textoReverso(p, false).replace(/[\t\n]+/g, ' ')}`).join('\n');
+  }
+  function ventanaExportar() {
+    const lista = filtradas();
+    abrirVentana({
+      titulo: 'Llevar a otra app',
+      cuerpo: `
+        <p class="ayuda">Se exportan las <b>${lista.length}</b> palabras que tienes a la vista (según los filtros de idioma y libro).</p>
+        <div class="bloque-copia">
+          <h3 class="seccion" style="margin:0;font-size:15px">Anki</h3>
+          <p class="ayuda">Descarga el archivo y, en Anki (ordenador, AnkiMobile o AnkiDroid), usa <b>Archivo → Importar</b>. Las columnas y las etiquetas (idioma y libro) se reconocen solas. Elige el tipo de nota «Básico» o «Básico (con tarjeta inversa)».</p>
+          <div class="botones"><button type="button" class="boton principal" data-accion="exportar-palabras" data-formato="anki">${icono('descargar')} Archivo para Anki</button></div>
+        </div>
+        <div class="bloque-copia">
+          <h3 class="seccion" style="margin:0;font-size:15px">Quizlet</h3>
+          <p class="ayuda">Copia la lista y, en Quizlet, crea un set y pulsa <b>Importar</b>. Pega el texto y elige «Tabulador» entre término y definición y «Nueva línea» entre tarjetas.</p>
+          <div class="botones"><button type="button" class="boton" data-accion="exportar-palabras" data-formato="quizlet">${icono('copiar')} Copiar para Quizlet</button></div>
+        </div>
+        <div class="bloque-copia">
+          <h3 class="seccion" style="margin:0;font-size:15px">Hoja de cálculo</h3>
+          <div class="botones"><button type="button" class="boton" data-accion="exportar-palabras" data-formato="csv">${icono('descargar')} Archivo .csv</button></div>
+        </div>`,
+      pie: `<span class="espacio"></span><button type="button" class="boton principal" data-accion="cerrar-ventana">Hecho</button>`,
+    });
   }
 
   // ---------- Acciones ----------
@@ -528,9 +854,30 @@ const Palabras = (() => {
     },
     'ver-palabra': b => ventanaPalabra(b.dataset.id),
     hablar: b => hablar(b.dataset.texto, b.dataset.idioma),
-    repasar: b => ventanaRepaso(b.dataset.libro || '', b.dataset.idioma || ''),
-    'girar-tarjeta': () => Palabras._girar?.(),
-    'nota-repaso': b => Palabras._responder?.(b.dataset.nota),
+    repasar: b => ventanaOpcionesRepaso(b.dataset.libro || '', b.dataset.idioma || ''),
+    'opcion-repaso': b => {
+      const o = opcionesGuardadas();
+      o[b.dataset.grupo] = b.dataset.valor;
+      ajuste.guardar('opcionesRepaso', JSON.stringify(o));
+      ventanaOpcionesRepaso(ambitoRepaso.libroId, ambitoRepaso.idioma);
+    },
+    'empezar-repaso': () => empezarRepaso(),
+    'girar-tarjeta': () => Palabras._sesion?.girar(),
+    'nota-repaso': b => Palabras._sesion?.responder(b.dataset.nota),
+    'elegir-genero': b => Palabras._sesion?.elegirGenero(b.dataset.genero),
+    'siguiente-genero': () => Palabras._sesion?.siguienteGenero(),
+    'no-lo-se': () => Palabras._sesion?.noLoSe(),
+    'abrir-exportar': () => ventanaExportar(),
+    'exportar-palabras': async b => {
+      const lista = filtradas();
+      if (!lista.length) { avisar('No hay palabras que exportar'); return; }
+      const dia = new Date().toISOString().slice(0, 10);
+      if (b.dataset.formato === 'anki') await entregarArchivo(`MisLibros-palabras-${dia}.txt`, txtAnki(lista), 'text/plain');
+      else if (b.dataset.formato === 'csv') await entregarArchivo(`MisLibros-palabras-${dia}.csv`, csvAnki(), 'text/csv');
+      else {
+        try { await navigator.clipboard.writeText(textoQuizlet(lista)); avisar(`Copiadas ${lista.length} tarjetas. Pégalas en Quizlet.`); } catch { avisar('No se ha podido copiar'); }
+      }
+    },
     'filtro-idioma': b => { filtro.idioma = b.dataset.idioma; pintarColumna(); },
     'vista-palabras-libro': b => { filtro.libro = b.dataset.libro; filtro.idioma = ''; E.vista = 'palabras'; if (innerWidth < 920) E.sel = null; pintarTodo(); },
     'pedir-borrar-palabra': b => {
@@ -551,6 +898,7 @@ const Palabras = (() => {
       if (r.sinRed) { avisar('Sin conexión'); b.disabled = false; b.textContent = 'Buscar otra vez'; return; }
       if (r.traducciones.length) p.traducciones = r.traducciones;
       if (r.definiciones.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
+      if (r.idioma === 'de' && r.generoBuscado) Object.assign(p, { genero: r.genero, plural: r.plural, generoBuscado: true });
       await guardar(p);
       ventanaPalabra(p.id);
     },
@@ -562,10 +910,29 @@ const Palabras = (() => {
   document.addEventListener('change', e => {
     if (e.target.id === 'filtro-libro-palabras') { filtro.libro = e.target.value; pintarColumna(); }
   });
-  addEventListener('online', () => setTimeout(completarPendientes, 2500));
-  setTimeout(completarPendientes, 3000);
+  /** Añade el género a las palabras alemanas guardadas antes de que existiera. */
+  let completandoGeneros = false;
+  async function completarGeneros() {
+    if (completandoGeneros || sinConexion()) return;
+    const lista = E.palabras.filter(p => p.idioma === 'de' && !p.generoBuscado && !p.pendiente).slice(0, 25);
+    if (!lista.length) return;
+    completandoGeneros = true;
+    let cambios = 0;
+    for (const p of lista) {
+      const g = await gramaticaAleman(p.palabra);
+      if (g.error) break;
+      if (g.sustantivo) { p.genero = g.genero; p.plural = g.plural; if (g.forma) p.palabra = g.forma; cambios++; }
+      p.generoBuscado = true;
+      await guardar(p);
+    }
+    completandoGeneros = false;
+    if (cambios && E.vista === 'palabras') pintarLista();
+  }
+
+  addEventListener('online', () => setTimeout(() => { completarPendientes(); completarGeneros(); }, 2500));
+  setTimeout(() => { completarPendientes(); completarGeneros(); }, 3000);
   if (puedeHablar()) speechSynthesis.getVoices(); // carga las voces
 
-  return { pintarColumna, seccionFicha, csvAnki, buscar, definicionesWikitext, limpiarWiki, calificar, INTERVALOS };
+  return { pintarColumna, seccionFicha, csvAnki, txtAnki, textoQuizlet, buscar, definicionesWikitext, limpiarWiki, calificar, comprobar, INTERVALOS };
 })();
 window.Palabras = Palabras;

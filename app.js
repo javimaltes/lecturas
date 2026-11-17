@@ -512,10 +512,19 @@ function comprimirImagen(archivo, max = 1800, calidad = 0.82) {
 
 let trabajadorOCR = null;
 let alProgresoOCR = null;
-async function trabajador() {
+// El lector necesita saber el idioma del texto (ä, ö, ü, ß, ñ, acentos y su diccionario).
+const IDIOMAS_OCR = { es: { codigo: 'spa', nombre: 'Español' }, en: { codigo: 'eng', nombre: 'Inglés' }, de: { codigo: 'deu', nombre: 'Alemán' } };
+let idiomaTrabajador = null;
+async function trabajador(idioma = 'es') {
   if (!window.Tesseract) throw new Error('sin-libreria');
+  const codigo = (IDIOMAS_OCR[idioma] || IDIOMAS_OCR.es).codigo;
+  if (trabajadorOCR && idiomaTrabajador !== codigo) {
+    try { await trabajadorOCR.terminate(); } catch { /* ya estaba cerrado */ }
+    trabajadorOCR = null;
+  }
   if (!trabajadorOCR) {
-    trabajadorOCR = await Tesseract.createWorker('spa', 1, { logger: m => alProgresoOCR?.(m) });
+    trabajadorOCR = await Tesseract.createWorker(codigo, 1, { logger: m => alProgresoOCR?.(m) });
+    idiomaTrabajador = codigo;
     await trabajadorOCR.setParameters({ preserve_interword_spaces: '1' });
   }
   return trabajadorOCR;
@@ -596,8 +605,8 @@ function quitarSubrayados(lienzo, altoLinea) {
 }
 
 /** Primera lectura: toda la página, para poder marcar las líneas con el dedo. */
-async function leerTextoDeFoto(dataURL) {
-  const t = await trabajador();
+async function leerTextoDeFoto(dataURL, idioma = 'es') {
+  const t = await trabajador(idioma);
   const img = await cargarImagen(dataURL);
   const c = document.createElement('canvas');
   c.width = img.naturalWidth;
@@ -612,9 +621,9 @@ async function leerTextoDeFoto(dataURL) {
 }
 
 /** Segunda lectura, solo de las líneas marcadas: recortadas, ampliadas y sin subrayados. */
-async function releerLineas(dataURL, lineas) {
+async function releerLineas(dataURL, lineas, idioma = 'es') {
   if (!lineas.length) return '';
-  const t = await trabajador();
+  const t = await trabajador(idioma);
   const img = await cargarImagen(dataURL);
   const altos = lineas.map(l => l.caja.y1 - l.caja.y0).sort((a, b) => a - b);
   const alto = Math.max(8, altos[Math.floor(altos.length / 2)]);
@@ -1605,6 +1614,46 @@ async function procesarPegado() {
 
 // ----- Cita -----
 const esIPhone = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const NOMBRE_ATAJO = 'Cita Mis Libros';
+let citaEsperandoAtajo = null;
+let citaProtegida = null; // la cita en blanco no se descarta mientras se explican los pasos del atajo
+
+// Al volver del atajo, se invita a pegar el texto que ha copiado.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !citaEsperandoAtajo) return;
+  const id = citaEsperandoAtajo;
+  citaEsperandoAtajo = null;
+  if ($('[data-accion="copiar-cita"]')?.dataset.id !== id) return;
+  const aviso = $('#aviso-atajo');
+  if (aviso) aviso.innerHTML = `<div class="consejo">${icono('pegar')}<p><b>¿Ya has elegido las líneas?</b> Pulsa «Pegar» para traer el texto.</p><button type="button" class="boton principal" data-accion="pegar-cita">Pegar</button></div>`;
+});
+
+/** Explica cómo crear el atajo de Atajos que hace la foto, lee el texto y lo copia. */
+function ventanaAtajo(idCita) {
+  citaProtegida = idCita || null;
+  abrirVentana({
+    titulo: 'Escanear con el iPhone',
+    cuerpo: `
+      <p class="ayuda">Este botón abre un <b>Atajo</b> del iPhone que hace una foto a la página, lee el texto con el lector de Apple (el mismo de la app Fotos), te deja elegir las líneas subrayadas y las copia. Al volver aquí, pulsas «Pegar». Solo hay que crearlo una vez:</p>
+      <ol class="pasos-atajo">
+        <li>Abre la app <b>Atajos</b> y pulsa <b>+</b> (arriba a la derecha) para crear uno nuevo.</li>
+        <li>Pulsa el nombre de arriba y llámalo exactamente <b>${NOMBRE_ATAJO}</b>.</li>
+        <li>Añade estas acciones, en este orden (búscalas con el buscador de abajo):
+          <ol>
+            <li><b>Hacer foto</b> <span class="nota-pequena">(o «Seleccionar fotos» si prefieres elegir una ya hecha)</span></li>
+            <li><b>Extraer texto de la imagen</b></li>
+            <li><b>Dividir texto</b> → toca «Espacios» y cámbialo a <b>Saltos de línea</b></li>
+            <li><b>Seleccionar de la lista</b> → toca la flecha y activa <b>Seleccionar varios</b></li>
+            <li><b>Combinar texto</b> → con <b>Espacios</b></li>
+            <li><b>Copiar al portapapeles</b></li>
+          </ol></li>
+        <li>Pulsa <b>OK</b> para guardarlo.</li>
+      </ol>
+      <p class="ayuda">Al usarlo: haz la foto, marca las líneas de la cita en la lista, pulsa <b>OK</b> y vuelve a Mis Libros con el enlace «◀» de arriba a la izquierda. La primera vez el iPhone puede pedir permiso para la cámara o el portapapeles: acepta.</p>`,
+    pie: `<button type="button" class="boton" data-accion="${idCita ? 'volver-cita' : 'cerrar-ventana'}" data-id="${esc(idCita || '')}">Ahora no</button>
+      <button type="button" class="boton principal" data-accion="atajo-listo" data-id="${esc(idCita || '')}">Ya lo he creado${idCita ? ': escanear' : ''}</button>`,
+  });
+}
 const citaVacia = c => !String(c.texto || '').trim() && !String(c.comentario || '').trim() && !c.imagen;
 
 function ventanaCita(id, empezarMarcando = false, enfocar = false) {
@@ -1615,19 +1664,22 @@ function ventanaCita(id, empezarMarcando = false, enfocar = false) {
     titulo: 'Cita',
     // Una cita que se abrió y se dejó en blanco no se guarda.
     alCerrar: () => {
-      if (citaVacia(c) && E.citas.includes(c)) {
+      if (citaVacia(c) && E.citas.includes(c) && citaProtegida !== c.id) {
         E.citas = E.citas.filter(x => x !== c);
         BD.borrar('citas', c.id);
       }
     },
     cuerpo: `
-      ${!c.texto && !c.imagen && esIPhone() ? `<div class="consejo">${icono('texto')}<p><b>Escanear texto:</b> toca el cuadro de abajo y, en el menú que aparece, elige «Escanear texto» (o el icono de un recuadro con líneas del teclado). Apunta a la página, selecciona las líneas subrayadas y pulsa «Insertar».</p></div>` : ''}
+      ${!c.texto && !c.imagen && esIPhone() ? `<div class="consejo">${icono('texto')}<p><b>Escanear texto:</b> toca el cuadro de abajo y, en el menú que aparece, elige «Escanear texto» (o el icono de un recuadro con líneas del teclado). Apunta a la página, selecciona las líneas subrayadas y pulsa «Insertar». O usa el botón «Escanear con el iPhone».</p></div>` : ''}
+      <div id="aviso-atajo"></div>
       <label class="etiqueta-campo">Texto de la cita
         <textarea class="campo" id="cita-texto" rows="5" style="font-family:var(--f-titulo);font-size:16px" placeholder="Escríbela o sácala de la foto">${esc(c.texto)}</textarea></label>
       <div class="fila-campo" style="flex-wrap:wrap">
         ${c.imagen ? `<button type="button" class="boton" data-accion="marcar-cita" data-id="${c.id}">${icono('texto')} ${c.texto ? 'Volver a marcar en la foto' : 'Sacar el texto de la foto'}</button>` : ''}
-        <button type="button" class="boton" data-accion="pegar-cita">${icono('pegar')} Pegar</button>
+        ${esIPhone() ? `<button type="button" class="boton" data-accion="lanzar-atajo" data-id="${c.id}">${icono('camara')} Escanear con el iPhone</button>` : ''}
+        <button type="button" class="boton" data-accion="pegar-cita" id="boton-pegar-cita">${icono('pegar')} Pegar</button>
       </div>
+      ${esIPhone() ? `<button type="button" class="boton plano" style="align-self:flex-start" data-accion="como-atajo">¿Cómo funciona «Escanear con el iPhone»?</button>` : ''}
       ${c.imagen && /iPhone|iPad/.test(navigator.userAgent) ? `<p class="nota-pequena">Truco: el iPhone lee el texto de las fotos muy bien. Abre la foto en la app Fotos, mantén el dedo sobre el texto, ajusta la selección, pulsa «Copiar» y luego «Pegar» aquí.</p>` : ''}
       <div class="seccion"><h2>Categoría <span class="espacio"></span><button type="button" class="boton plano" data-accion="categorias" style="text-transform:none;letter-spacing:0">${icono('paleta')} Editar</button></h2>
         <div class="chips-categoria" id="chips-cita">${chipsCategoria(c.categoria)}</div></div>
@@ -1664,11 +1716,16 @@ function ventanaMarcar(id) {
   const sel = new Set();
   let modo = null;
   let tam = null;
+  const libro = libroPorId(c.libroId);
+  let idioma = c.idiomaTexto || libro?.idioma || 'es';
+  let lectura = 0; // para ignorar una lectura antigua si cambias de idioma a mitad
   abrirVentana({
     titulo: 'Marca la cita',
     ancha: true,
     izquierda: `<button type="button" class="boton plano" data-accion="volver-cita" data-id="${c.id}">${icono('atras')} Cita</button>`,
     cuerpo: `
+      <div class="fila-campo" style="align-items:center;flex-wrap:wrap"><span class="ayuda">Idioma del texto</span>
+        <div class="segmentos" id="idioma-ocr" style="flex:1;min-width:220px">${Object.entries(IDIOMAS_OCR).map(([k, v]) => `<button type="button" data-ocr-idioma="${k}" aria-pressed="${idioma === k}">${v.nombre}</button>`).join('')}</div></div>
       <p class="ayuda" id="ayuda-ocr"><span class="cargando"></span> Leyendo el texto de la foto… <span id="pct-ocr"></span></p>
       <div class="zona-ocr" id="zona-ocr"><img id="img-ocr" src="${c.imagen}" alt="Foto de la página"></div>
       <p class="texto-elegido" id="texto-elegido" hidden></p>`,
@@ -1714,7 +1771,7 @@ function ventanaMarcar(id) {
     alProgresoOCR = null;
     let texto = primera;
     try {
-      const afinado = await releerLineas(c.imagen, elegidas);
+      const afinado = await releerLineas(c.imagen, elegidas, idioma);
       // Si la segunda lectura sale muy distinta en longitud, algo ha ido mal: se queda la primera.
       if (afinado && afinado.length > primera.length * 0.6 && afinado.length < primera.length * 1.5) texto = afinado;
     } catch { /* se queda la primera lectura */ }
@@ -1724,6 +1781,13 @@ function ventanaMarcar(id) {
   };
 
   const preparar = async () => {
+    const esta = ++lectura;
+    lineas = [];
+    sel.clear();
+    $$('.linea-ocr', zona).forEach(d => d.remove());
+    actualizar();
+    const ayuda0 = $('#ayuda-ocr');
+    if (ayuda0) ayuda0.innerHTML = `<span class="cargando"></span> Leyendo el texto en ${IDIOMAS_OCR[idioma].nombre.toLowerCase()}… <span id="pct-ocr"></span>`;
     await (img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; }));
     tam = { w: img.naturalWidth, h: img.naturalHeight };
     alProgresoOCR = m => {
@@ -1732,9 +1796,11 @@ function ventanaMarcar(id) {
       if (m.status === 'recognizing text') p.textContent = Math.round(m.progress * 100) + ' %';
       else if (/load|initializ/i.test(m.status)) p.textContent = '(preparando el lector la primera vez, puede tardar un poco)';
     };
+    let leidas;
     try {
-      lineas = await leerTextoDeFoto(c.imagen);
+      leidas = await leerTextoDeFoto(c.imagen, idioma);
     } catch (e) {
+      if (esta !== lectura) return;
       const ayuda = $('#ayuda-ocr');
       if (ayuda) ayuda.textContent = e.message === 'sin-libreria'
         ? (sinConexion()
@@ -1745,12 +1811,22 @@ function ventanaMarcar(id) {
           : 'No he podido leer el texto de la foto. Puedes escribir la cita a mano.');
       return;
     }
-    if (!$('#zona-ocr')) return;
+    if (!$('#zona-ocr') || esta !== lectura) return;
+    lineas = leidas;
     zona.insertAdjacentHTML('beforeend', lineas.map(l => `<div class="linea-ocr" data-id="${l.id}" style="left:${(l.caja.x0 / tam.w) * 100}%;top:${(l.caja.y0 / tam.h) * 100}%;width:${((l.caja.x1 - l.caja.x0) / tam.w) * 100}%;height:${((l.caja.y1 - l.caja.y0) / tam.h) * 100}%"></div>`).join(''));
     $('#ayuda-ocr').textContent = lineas.length
       ? 'Pasa el dedo (o el ratón) por las líneas que subrayaste para marcarlas.'
       : 'No he encontrado texto. Prueba con otra foto, con más luz o más cerca.';
   };
+  $$('[data-ocr-idioma]').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.ocrIdioma === idioma) return;
+    idioma = b.dataset.ocrIdioma;
+    $$('[data-ocr-idioma]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.ocrIdioma === idioma)));
+    c.idiomaTexto = idioma;
+    BD.poner('citas', c);
+    if (libro && !libro.idioma) { libro.idioma = idioma; guardarLibro(libro, true); }
+    preparar();
+  }));
   preparar();
 }
 
@@ -1872,6 +1948,22 @@ const acciones = {
   'procesar-pegado': () => procesarPegado(),
 
   'abrir-cita': b => ventanaCita(b.dataset.id),
+  'lanzar-atajo': b => {
+    if (!ajuste.leer('atajoCreado')) { ventanaAtajo(b.dataset.id); return; }
+    citaEsperandoAtajo = b.dataset.id;
+    location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent(NOMBRE_ATAJO);
+  },
+  'como-atajo': () => ventanaAtajo($('[data-accion="copiar-cita"]')?.dataset.id || ''),
+  'atajo-listo': b => {
+    ajuste.guardar('atajoCreado', '1');
+    const id = b.dataset.id;
+    if (id) {
+      ventanaCita(id);
+      citaProtegida = null;
+      citaEsperandoAtajo = id;
+      location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent(NOMBRE_ATAJO);
+    } else cerrarVentana();
+  },
   'nueva-cita': () => {
     const l = libroPorId(E.sel);
     if (!l) return;
@@ -1880,7 +1972,7 @@ const acciones = {
     BD.poner('citas', c);
     ventanaCita(c.id, false, true);
   },
-  'volver-cita': b => ventanaCita(b.dataset.id),
+  'volver-cita': b => { ventanaCita(b.dataset.id); citaProtegida = null; },
   'marcar-cita': b => ventanaMarcar(b.dataset.id),
   'cat-cita': b => {
     const id = $('[data-accion="copiar-cita"]')?.dataset.id;
@@ -1928,7 +2020,7 @@ const acciones = {
       ajuste.guardar('ultimaCopia', ahora());
     } else if (q === 'html') await entregarArchivo(base + '.html', htmlLegible(), 'text/html');
     else if (q === 'csv') await entregarArchivo(base + '.csv', csvLibros(), 'text/csv');
-    else if (q === 'palabras') await entregarArchivo(base + '-palabras.csv', Palabras.csvAnki(), 'text/csv');
+    else if (q === 'palabras') await entregarArchivo(base + '-palabras.txt', Palabras.txtAnki(E.palabras), 'text/plain');
     else await entregarArchivo(base + '-citas.csv', csvCitas(), 'text/csv');
   },
 };
@@ -2095,6 +2187,8 @@ async function arrancar() {
   for (const c of CATEGORIAS_INICIALES) {
     if (!E.categorias.some(k => k.orden === c.orden)) { E.categorias.push({ ...c }); await BD.ponerCrudo('categorias', { ...c }); }
   }
+  for (const c of E.citas.filter(citaVacia)) await BD.borrar('citas', c.id); // citas en blanco que quedaron sueltas
+  E.citas = E.citas.filter(c => !citaVacia(c));
   const porRevisar = E.libros.filter(l => l.estado === 'Por revisar');
   for (const l of porRevisar) l.estado = 'Cajón de sastre';
   if (porRevisar.length) await BD.ponerVarios('libros', porRevisar);

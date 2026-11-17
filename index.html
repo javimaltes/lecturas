@@ -344,6 +344,8 @@ input[type="range"] { width: 100%; accent-color: var(--acento); }
 .lista-categorias div { display: flex; gap: 10px; align-items: center; }
 .lista-categorias input[type="color"] { width: 42px; height: 42px; border: 1px solid var(--linea); border-radius: 10px; padding: 3px; background: var(--hoja); flex: none; }
 .bloque-copia { display: flex; flex-direction: column; gap: 8px; }
+.pasos-atajo { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 14.5px; }
+.pasos-atajo ol { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 @media (max-width: 400px) { .marca { display: none; } }
 
 /* ---------- Palabras y tarjetas ---------- */
@@ -378,6 +380,35 @@ input[type="range"] { width: 100%; accent-color: var(--acento); }
 .botones-nota .boton { flex-direction: column; gap: 0; min-height: 54px; white-space: normal; }
 .botones-nota small { font-size: 11.5px; font-weight: 400; color: var(--tinta-2); }
 .nota-otra b { color: var(--peligro); } .nota-dificil b { color: var(--aviso); } .nota-bien b { color: var(--bien); }
+.botones-nota .sugerida { border-width: 2px; border-color: currentColor; box-shadow: 0 0 0 3px var(--acento-suave); }
+.botones-nota .nota-otra.sugerida { border-color: var(--peligro); } .botones-nota .nota-dificil.sugerida { border-color: var(--aviso); } .botones-nota .nota-bien.sugerida { border-color: var(--bien); }
+/* Artículos alemanes: der azul, die rojo, das verde */
+:root { --der: #2a62c9; --die: #c8372d; --das: #23804a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --der: #7fa8f5; --die: #ff8d82; --das: #6fd49a; } }
+:root[data-theme="dark"] { --der: #7fa8f5; --die: #ff8d82; --das: #6fd49a; }
+.art { font-weight: 600; font-family: var(--f-texto); font-size: .82em; }
+.art-m { color: var(--der); } .art-f { color: var(--die); } .art-n { color: var(--das); }
+.botones-genero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
+.art-boton { min-height: 56px; font-size: 20px; font-weight: 600; font-family: var(--f-titulo); }
+.art-boton.art-m { border-color: var(--der); } .art-boton.art-f { border-color: var(--die); } .art-boton.art-n { border-color: var(--das); }
+.veredicto { font-weight: 600; font-size: 15px; }
+.veredicto.bien { color: var(--bien); } .veredicto.casi { color: var(--aviso); } .veredicto.mal { color: var(--peligro); }
+.hueco { letter-spacing: 1px; color: var(--acento); font-style: normal; }
+.opciones-repaso { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.opciones-repaso button { border: 1px solid var(--linea); background: var(--hoja); border-radius: 12px; padding: 8px 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.opciones-repaso button b { font-family: var(--f-titulo); font-size: 20px; font-variant-numeric: tabular-nums; }
+.opciones-repaso button small { font-size: 12px; color: var(--tinta-2); text-align: center; line-height: 1.2; }
+.opciones-repaso button[aria-pressed="true"] { border-color: var(--acento); background: var(--acento-suave); }
+.opciones-repaso button.vacia { opacity: .55; }
+.interruptor { display: flex; align-items: center; gap: 10px; font-size: 14.5px; }
+.interruptor input { width: 20px; height: 20px; accent-color: var(--acento); }
+.estadisticas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.estadisticas div { background: var(--hoja-2); border-radius: 10px; padding: 8px 6px; text-align: center; display: flex; flex-direction: column; }
+.estadisticas b { font-family: var(--f-titulo); font-size: 20px; font-variant-numeric: tabular-nums; }
+.estadisticas small { font-size: 12px; color: var(--tinta-2); }
+.barra-niveles { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--hoja-2); }
+.barra-niveles .dominadas { background: var(--bien); } .barra-niveles .aprendiendo { background: var(--aviso); } .barra-niveles .nuevas { background: var(--linea); }
+div.tarjeta-flash[role="button"] { cursor: pointer; }
 .bloque-copia .botones { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>
 </head>

@@ -31,18 +31,39 @@ Son 9 archivos: index.html, app.js, palabras.js, sync.js, sw.js, manifest.webman
   instalarla como app con el icono de la barra de direcciones.
 
 === CITAS EN EL IPHONE ===
-  En la ficha del libro: "Añadir cita" -> toca el cuadro de texto -> "Escanear texto".
-  El iPhone lee la página con la cámara: selecciona las líneas y pulsa "Insertar".
+  Opción 1 (sin preparar nada): "Añadir cita" -> toca el cuadro de texto ->
+  "Escanear texto". Selecciona las líneas y pulsa "Insertar".
+
+  Opción 2 (con foto, el lector de Apple y elegir líneas): botón
+  "Escanear con el iPhone". Necesita un Atajo, que se crea una vez:
+    App Atajos -> "+" -> nombre exacto: Cita Mis Libros
+    Acciones, en este orden:
+      1. Hacer foto            (o "Seleccionar fotos")
+      2. Extraer texto de la imagen
+      3. Dividir texto          -> por "Saltos de línea"
+      4. Seleccionar de la lista -> activa "Seleccionar varios"
+      5. Combinar texto         -> con "Espacios"
+      6. Copiar al portapapeles
+    Al usarlo: haz la foto, marca las líneas, OK, vuelve a Mis Libros
+    (enlace "◀" arriba a la izquierda) y pulsa "Pegar".
 
 === PALABRAS Y TARJETAS ===
   En la ficha del libro: "Buscar una palabra" (español, inglés o alemán).
   Inglés y alemán: traducción al español + definiciones (Wiktionary, en inglés).
   Español: definiciones en español (Wiktionary).
   "Guardar tarjeta" y queda unida al libro. Pestaña "Palabras": todas, con filtros.
-  "Repasar": Otra vez / Difícil / Bien. Lo que sabes vuelve cada vez más tarde
+  Alemán: los sustantivos muestran el artículo (der azul, die rojo, das verde)
+  y el plural. Si buscas un plural o una forma ("Häuser"), te lleva a la base.
+  "Repasar" -> eliges qué tarjetas (las de hoy, todas, difíciles, nuevas),
+  cuántas y cómo:
+    Ver y recordar | Al revés | Escribir la palabra | der, die, das
+  Responde Otra vez / Difícil / Bien. Lo que sabes vuelve cada vez más tarde
   (1, 3, 7, 16, 35 y 90 días); lo que fallas, enseguida.
-  En el ordenador: espacio = ver respuesta; 1, 2, 3 = Otra vez, Difícil, Bien.
-  Copia y ajustes -> "Palabras para Anki" exporta tu vocabulario.
+  En el ordenador: espacio = ver respuesta; 1, 2, 3 = Otra vez, Difícil, Bien
+  (en der/die/das: 1, 2, 3 = der, die, das).
+  Pestaña Palabras -> "Llevar a Anki o Quizlet":
+    Anki: descarga el archivo y en Anki, Archivo -> Importar.
+    Quizlet: copia, y en Quizlet crea un set -> Importar -> pega.
 
 === SIN COBERTURA ===
   Abre la app al menos una vez CON conexión: desde entonces se abre también sin red.
