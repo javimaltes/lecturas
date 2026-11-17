@@ -123,3 +123,9 @@ LIBROS QUE VES EN X (TWITTER)
   «Copiar» > pégalo en Mis Libros. También puedes subir la captura con «Subir una captura».
 - En el ordenador: arrastra el botón «+ Mis Libros» (dentro de Pegar) a la barra de marcadores.
   Cuando veas un tuit, púlsalo y se abre Mis Libros con ese tuit.
+
+PORTADAS AUTOMÁTICAS
+- Al crear un libro «A mano», la app busca su portada sola (Apple Books, Google Books y Open Library).
+  Si cambias el título o el autor en la ficha, vuelve a buscarla.
+- Si no es tu edición: en la ficha, «Cambiar portada» te enseña varias para elegir, o puedes usar una foto tuya.
+- Sin conexión, la busca cuando vuelva la cobertura.

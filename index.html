@@ -321,6 +321,11 @@ input[type="range"] { width: 100%; accent-color: var(--acento); }
 label.resultado { cursor: pointer; }
 label.resultado input { width: 20px; height: 20px; flex: none; accent-color: var(--acento); }
 label.resultado:has(input:checked) { background: var(--acento-suave); }
+.rejilla-portadas { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.rejilla-portadas button { border: 1px solid var(--linea); border-radius: 8px; background: var(--hoja-2); padding: 0 0 6px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; text-align: left; }
+.rejilla-portadas button:hover { border-color: var(--acento); }
+.rejilla-portadas img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; display: block; background: var(--hoja-2); }
+.rejilla-portadas small { padding: 0 6px; font-size: 11.5px; color: var(--tinta-2); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ayuda-x { border: 1px solid var(--linea); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
 .ayuda-x[open] { padding-bottom: 14px; }
 .ayuda-x summary { cursor: pointer; font-size: 14.5px; }

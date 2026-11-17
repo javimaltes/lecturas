@@ -845,9 +845,86 @@ function fusionarDatos(l, d) {
   if (!l.paginas && d.paginas) l.paginas = d.paginas;
 }
 
+// ----- Portada automática para los libros creados a mano -----
+const normal = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9ß]+/g, ' ').trim();
+
+/** Portadas posibles para un título (Apple Books, Google Books y Open Library), las más parecidas primero. */
+async function buscarPortadas(titulo, autores = '') {
+  const q = [titulo, autores].filter(Boolean).join(' ');
+  const [g, ap, ol] = await Promise.all([
+    Buscador.google(q, 20),
+    jsonp('https://itunes.apple.com/search?media=ebook&country=ES&limit=20&term=' + encodeURIComponent(q)),
+    pedirJSON('https://openlibrary.org/search.json?limit=10&fields=title,author_name,cover_i&q=' + encodeURIComponent(q)),
+  ]);
+  Buscador.ultimaSinRed = [g.error, ap.error, ol.error].every(e => ERRORES_RED.includes(e));
+  const todas = [
+    ...((ap.datos?.results) || []).map(x => Buscador.deApple(x)),
+    ...g.vols.map(v => Buscador.deGoogle(v, '')),
+    ...((ol.datos?.docs) || []).filter(d => d.cover_i).map(d => ({ titulo: d.title, autores: (d.author_name || []).join(', '), portada: `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg` })),
+  ].filter(d => d.portada);
+  const t = normal(titulo);
+  const a = normal(autores).split(' ').filter(x => x.length > 2);
+  const nota = d => {
+    const dt = normal(d.titulo);
+    let n = dt === t ? 4 : (dt.startsWith(t) || t.startsWith(dt)) ? 3 : t.split(' ').every(w => dt.includes(w)) ? 1 : 0;
+    if (a.length && a.some(w => normal(d.autores).includes(w))) n += 2;
+    if (/mzstatic/.test(d.portada)) n += 0.5; // las de Apple y Open Library son grandes; las de Google, pequeñas
+    else if (/openlibrary/.test(d.portada)) n += 0.3;
+    return n;
+  };
+  const vistas = new Set();
+  return todas.map(d => ({ ...d, nota: nota(d) }))
+    .filter(d => !vistas.has(d.portada) && vistas.add(d.portada))
+    .sort((x, y) => y.nota - x.nota);
+}
+
+/** Pone sola la portada de un libro sin portada (o con una puesta sola antes). Sin red, lo deja para luego. */
+async function portadaAutomatica(l) {
+  if (!l?.titulo || (l.portada && !l.portadaAuto)) return;
+  if (sinConexion()) { l.buscarPortada = true; guardarLibro(l, true); return; }
+  const titulo = l.titulo;
+  const lista = await buscarPortadas(l.titulo, l.autores);
+  if (l.titulo !== titulo || (l.portada && !l.portadaAuto)) return; // mientras tanto lo has cambiado tú
+  const mejor = lista.find(d => d.nota >= 3) || (lista[0]?.nota >= 1 ? lista[0] : null);
+  delete l.buscarPortada;
+  if (mejor) {
+    l.portada = mejor.portada;
+    l.portadaAuto = true;
+  } else if (Buscador.ultimaSinRed) {
+    l.buscarPortada = true;
+  }
+  guardarLibro(l, true);
+  pintarTodo();
+}
+
+let portadasOfrecidas = [];
+async function ventanaPortadas(id) {
+  const l = libroPorId(id);
+  if (!l) return;
+  abrirVentana({
+    titulo: 'Elegir portada',
+    cuerpo: `<form class="fila-campo" data-form="portadas"><input class="campo" id="consulta-portada" value="${esc([l.titulo, l.autores].filter(Boolean).join(' '))}" autocomplete="off"><button class="boton" type="submit">Buscar</button></form>
+      <div id="lista-portadas"></div>
+      <label class="boton" style="align-self:flex-start">${icono('foto')} Usar una foto mía<input type="file" accept="image/*" data-archivo="portada" hidden></label>`,
+  });
+  pintarPortadas(l.titulo, l.autores);
+}
+async function pintarPortadas(titulo, autores) {
+  const c = $('#lista-portadas');
+  if (!c) return;
+  if (sinConexion()) { c.innerHTML = '<p class="ayuda">Sin conexión. Prueba cuando vuelva la cobertura.</p>'; return; }
+  c.innerHTML = '<p class="ayuda"><span class="cargando"></span> Buscando portadas…</p>';
+  portadasOfrecidas = (await buscarPortadas(titulo, autores)).slice(0, 18);
+  if (!$('#lista-portadas')) return;
+  c.innerHTML = portadasOfrecidas.length
+    ? `<p class="ayuda">Toca la que corresponda a tu edición.</p><div class="rejilla-portadas">${portadasOfrecidas.map((d, i) => `<button type="button" data-accion="elegir-portada" data-i="${i}" title="${esc(d.titulo + (d.autores ? ' · ' + d.autores : ''))}"><img src="${esc(d.portada)}" alt="" loading="lazy" onerror="this.parentNode.remove()"><small>${esc(d.titulo)}</small></button>`).join('')}</div>`
+    : '<p class="ayuda">No he encontrado portadas. Prueba con otras palabras o con el apellido del autor.</p>';
+}
+
 let completando = false;
 async function completarPendientes(manual = false, soloId = null) {
   if (completando) return;
+  if (!sinConexion()) for (const l of E.libros.filter(x => x.buscarPortada && !x.pendiente)) await portadaAutomatica(l);
   const lista = E.libros.filter(l => l.pendiente && (soloId ? l.id === soloId : (manual || !l.pendiente.fallido)));
   if (!lista.length) return;
   if (sinConexion()) { if (manual) avisar('Sigues sin conexión'); return; }
@@ -1052,7 +1129,8 @@ function pintarFicha() {
         <h1>${esc(tituloVisible(l))}</h1>
         ${l.autores ? `<p class="autor">${esc(l.autores)}</p>` : ''}
         <div class="acciones">
-          <label class="boton">${icono('foto')} Cambiar portada<input type="file" accept="image/*" data-archivo="portada" hidden></label>
+          <button type="button" class="boton" data-accion="buscar-portada" data-id="${l.id}">${icono('foto')} ${l.portada ? 'Cambiar portada' : 'Buscar portada'}</button>
+          ${l.portadaAuto ? '<span class="ayuda">Portada puesta sola: si no es tu edición, cámbiala.</span>' : ''}
         </div>
       </div>
     </div>
@@ -2165,6 +2243,18 @@ const acciones = {
   'cerrar-ficha': () => { E.sel = null; pintarTodo(); },
   'cerrar-consejo': () => { ajuste.guardar('consejoVisto', '1'); pintarColumna(); },
   'completar-ahora': () => completarPendientes(true),
+  'buscar-portada': b => ventanaPortadas(b.dataset.id),
+  'elegir-portada': b => {
+    const d = portadasOfrecidas[+b.dataset.i];
+    const l = libroPorId(E.sel);
+    if (!d || !l) return;
+    l.portada = d.portada;
+    delete l.portadaAuto;
+    delete l.buscarPortada;
+    guardarLibro(l, true);
+    cerrarVentana();
+    pintarTodo();
+  },
   'reintentar-pendiente': b => { const l = libroPorId(b.dataset.id); if (l?.pendiente) { l.pendiente.fallido = false; completarPendientes(true, l.id); } },
   'quitar-pendiente': b => { const l = libroPorId(b.dataset.id); delete l.pendiente; guardarLibro(l, true); pintarTodo(); },
   'guardar-titulo-pendiente': async b => {
@@ -2342,6 +2432,7 @@ document.addEventListener('submit', async e => {
     buscarYAnadirIsbn(isbn);
   }
   if (tipo === 'titulo') buscarPorTitulo($('#consulta').value);
+  if (tipo === 'portadas') pintarPortadas($('#consulta-portada').value.trim(), '');
   if (tipo === 'tuit-titulo' && estadoTuits) {
     const q = $('#tuit-titulo').value.trim();
     if (!q) return;
@@ -2356,6 +2447,7 @@ document.addEventListener('submit', async e => {
     await anadirLibro(l);
     E.sel = l.id;
     cerrarVentana();
+    portadaAutomatica(l);
   }
 });
 
@@ -2403,6 +2495,11 @@ document.addEventListener('change', async e => {
   if (t.id === 'filtro-etiqueta') { E.filtro.etiqueta = t.value; pintarColumna(); return; }
   if (t.dataset.repintar) { pintarFicha(); return; }
   if (t.dataset.catColor !== undefined || t.dataset.catNombre !== undefined) return;
+  if ((t.dataset.campo === 'titulo' || t.dataset.campo === 'autores') && E.sel) {
+    const l = libroPorId(E.sel);
+    if (l && (!l.portada || l.portadaAuto)) portadaAutomatica(l);
+    return;
+  }
   if (t.dataset.tuit !== undefined && estadoTuits) {
     const g = estadoTuits.grupos[+t.dataset.tuit];
     if (!g) return;
@@ -2418,7 +2515,10 @@ document.addEventListener('change', async e => {
   if (archivo === 'portada') {
     const l = libroPorId(E.sel);
     l.portada = await comprimirImagen(archivos[0], 700, 0.85);
+    delete l.portadaAuto;
+    delete l.buscarPortada;
     guardarLibro(l, true);
+    if ($('#lista-portadas')) cerrarVentana();
     pintarTodo();
   }
   if (archivo === 'cita') {
