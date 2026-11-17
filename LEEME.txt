@@ -112,3 +112,14 @@ Son 9 archivos: index.html, app.js, palabras.js, sync.js, sw.js, manifest.webman
   "Upload files", arrastra los archivos nuevos (reemplazan a los viejos) y
   "Commit changes". En 1 o 2 minutos la web está actualizada; en el iPhone,
   cierra la app y vuelve a abrirla. Nada de reinstalar ni de renovar cada 7 días.
+
+LIBROS QUE VES EN X (TWITTER)
+- En el tuit: compartir > «Copiar enlace». En Mis Libros: Añadir > Pegar > «Pegar» > «Añadir libros».
+- La app lee el tuit, encuentra los títulos (entre comillas, en listas, «Título, de Autor», ISBN o enlaces
+  de tiendas) y te enseña una lista para marcar los que quieres. Se guardan con la etiqueta «tuiter» y
+  el enlace del tuit en las notas. Si falta alguno, escribe su título en la misma ventana.
+- Si el tuit no se puede leer (privado, borrado o X lo bloquea), pega su texto en el cuadro.
+- Si el libro solo sale en la foto: captura de pantalla > ábrela en Fotos > mantén pulsado el texto >
+  «Copiar» > pégalo en Mis Libros. También puedes subir la captura con «Subir una captura».
+- En el ordenador: arrastra el botón «+ Mis Libros» (dentro de Pegar) a la barra de marcadores.
+  Cuando veas un tuit, púlsalo y se abre Mis Libros con ese tuit.

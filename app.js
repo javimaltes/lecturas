@@ -1266,7 +1266,7 @@ async function pintarPestanaAnadir() {
     setTimeout(() => $('#consulta')?.focus(), 50);
   } else if (pestanaAnadir === 'pegar') {
     c.innerHTML = `
-      <textarea class="campo" id="pegado" rows="6" placeholder="Pega aquí enlaces de Amazon, Casa del Libro, Goodreads, Fnac…&#10;También vale un ISBN o un título por línea."></textarea>
+      <textarea class="campo" id="pegado" rows="6" placeholder="Pega aquí enlaces de Amazon, Casa del Libro, Goodreads, Fnac… o de un tuit.&#10;También vale un ISBN o un título por línea, o el texto copiado de un tuit."></textarea>
       <div class="fila-campo" style="flex-wrap:wrap;align-items:center">
         <button type="button" class="boton" data-accion="pegar-portapapeles">${icono('pegar')} Pegar</button>
         <span class="espacio"></span>
@@ -1276,7 +1276,19 @@ async function pintarPestanaAnadir() {
           </select></label>
       </div>
       <button type="button" class="boton principal grande" data-accion="procesar-pegado">Añadir libros</button>
-      <div id="progreso-pegado" class="progreso-lista"></div>`;
+      <div id="progreso-pegado" class="progreso-lista"></div>
+      <details class="ayuda-x">
+        <summary><b>Libros que ves en X (Twitter)</b></summary>
+        <ol class="pasos-atajo">
+          <li>En el tuit, pulsa ${esIPhone() ? 'el botón de compartir' : 'compartir'} y elige <b>Copiar enlace</b>.</li>
+          <li>Vuelve aquí, pulsa <b>Pegar</b> y <b>Añadir libros</b>. Leo el tuit, busco los títulos que menciona y te enseño una lista para que marques los que quieres.</li>
+          <li>Se guardan con la etiqueta <b>tuiter</b> y el enlace al tuit en las notas.</li>
+        </ol>
+        <p class="ayuda">¿El libro solo sale en la foto? Haz una captura de pantalla y súbela: leo el texto que tenga.${esIPhone() ? ' Suele ir mejor abrir la captura en Fotos, mantener pulsado el texto, «Copiar», y pegarlo aquí.' : ''}</p>
+        <label class="boton" style="align-self:flex-start">${icono('foto')} Subir una captura<input type="file" accept="image/*" data-archivo="captura" hidden></label>
+        ${esIPhone() ? '' : `<p class="ayuda">En el ordenador: arrastra este botón a la barra de marcadores. Cuando estés viendo un tuit, púlsalo y se abre aquí con el tuit listo.</p>
+        <a class="marcador" href="${esc(marcadorOrdenador())}" onclick="event.preventDefault();avisar('Arrástralo a la barra de marcadores')">+ Mis Libros</a>`}
+      </details>`;
   } else {
     c.innerHTML = `
       <p class="ayuda">Crea la ficha vacía y rellénala tú.</p>
@@ -1564,11 +1576,266 @@ async function elegirResultado(i) {
   avisar(`Al cajón de sastre: ${l.titulo}`);
 }
 
+// ----- Libros vistos en X (Twitter) -----
+const RE_TUIT = /^https?:\/\/(?:www\.|mobile\.)?(?:twitter|x)\.com\/(?:[^/?#]+\/status(?:es)?|i\/web\/status)\/(\d+)/i;
+const esTuit = e => RE_TUIT.test(e);
+const RE_EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/gu;
+
+/** Lee el texto de un tuit con el servicio público de X para incrustar tuits (no hace falta cuenta). */
+async function leerTuit(url) {
+  const limpio = url.split(/[?#]/)[0].replace(/\/\/(?:www\.|mobile\.)?x\.com\//i, '//twitter.com/');
+  const r = await jsonp('https://publish.twitter.com/oembed?omit_script=1&dnt=true&hide_thread=true&lang=es&url=' + encodeURIComponent(limpio), 10000);
+  const html = r.datos?.html;
+  if (!html) return null;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const p = doc.querySelector('blockquote p');
+  if (!p) return null;
+  p.querySelectorAll('br').forEach(b => b.replaceWith('\n'));
+  const enlaces = [];
+  p.querySelectorAll('a').forEach(a => {
+    const t = a.textContent.trim();
+    if (/^https?:\/\/t\.co\//.test(t) || /^pic\.(twitter|x)\.com/.test(t)) a.remove();
+    else if (/^https?:\/\//.test(a.href) && !/(twitter|x)\.com\/(hashtag|search)/.test(a.href) && !t.startsWith('@')) enlaces.push(a.href);
+  });
+  return { texto: p.textContent.trim(), autor: r.datos.author_name || '', enlaces };
+}
+
+/** Busca en el texto de un tuit los posibles títulos: ISBN, títulos entre comillas, listas y «Título, de Autor». */
+function candidatosDeTexto(texto) {
+  const lista = [];
+  const meter = (q, como) => {
+    q = q.replace(RE_EMOJI, ' ').replace(/#(\w)/g, '$1').replace(/\s+/g, ' ').replace(/^[\s\-–—:,.;|]+|[\s\-–—:,.;|]+$/g, '').trim();
+    if (q.length < 2 || q.length > 120 || !/[a-zà-ÿ]{2}/i.test(q) && como !== 'isbn') return;
+    if (lista.some(c => c.q.toLowerCase() === q.toLowerCase())) return;
+    lista.push({ q, como });
+  };
+  const limpio = String(texto).replace(/https?:\/\/\S+/g, ' ').replace(/pic\.(twitter|x)\.com\/\S+/g, ' ');
+  // 1. ISBN
+  const re13 = /(^|\D)(97[89]\d{10})(?!\d)/g;
+  let m;
+  const sinGuiones = limpio.replace(/-/g, '');
+  while ((m = re13.exec(sinGuiones))) if (Buscador.valido13(m[2])) meter(m[2], 'isbn');
+  // 2. Entre comillas, con el autor si viene detrás («Título», de Autor / "Title" by Author)
+  const AUTOR = '((?:[A-ZÀ-Ý][\\wÀ-ÿ\'’.-]*\\.?\\s?){1,4})';
+  const reComillas = new RegExp('[«“"„‘]([^«»“”"„‘’\\n]{2,90})[»”"“’](?:\\s*,?\\s*\\(?(?:de|by|von|di|of|par|del?)\\s+' + AUTOR + ')?', 'g');
+  while ((m = reComillas.exec(limpio))) meter(m[1] + (m[2] ? ' ' + m[2] : ''), 'comillas');
+  // 3. Renglones de una lista (viñetas, números o un emoji al principio) y renglones «Título, de Autor»
+  for (const bruta of limpio.split(/\n/)) {
+    const linea = bruta.replace(/@\w+/g, ' ').trim();
+    if (!linea || /[«“"„]/.test(linea)) continue; // lo entrecomillado ya está cogido
+    const vineta = linea.match(/^(?:[-–—•·*▪►→✅✔☑️]|\d{1,2}\s*[.)º°-]|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]️?)\s*(.+)$/u);
+    const deAutor = linea.match(new RegExp('^([^,.!?:]{2,70}?)\\s*(?:,|\\s[-–—]|\\()\\s*(?:de|by|von|di|of)\\s+' + AUTOR + '\\)?\\s*$'));
+    if (deAutor) meter(deAutor[1] + ' ' + deAutor[2], 'lista');
+    else if (vineta && vineta[1].split(/\s+/).length <= 14) meter(vineta[1], 'lista');
+    else if (/^[^.!?¿¡]{2,70}\s(by|von)\s[A-ZÀ-Ý]/.test(linea)) meter(linea.replace(/\s(by|von)\s/, ' '), 'lista');
+  }
+  // 4. Si no hay nada claro, se prueba con el principio del texto
+  if (!lista.length) {
+    const palabras = limpio.replace(/@\w+/g, ' ').replace(RE_EMOJI, ' ').replace(/#/g, '').split(/\s+/).filter(Boolean);
+    if (palabras.length) meter(palabras.slice(0, 10).join(' '), 'texto');
+  }
+  return lista.slice(0, 12);
+}
+
+let estadoTuits = null;
+/** Ventana para elegir qué libros del tuit se guardan. */
+async function ventanaTuits({ enlaces = [], texto = '', otros = [], extras = [], destino = 'Cajón de sastre', captura = false }) {
+  estadoTuits = { enlaces, destino, autor: '', grupos: [], texto: texto.trim(), captura, extras, leyendo: !!enlaces.length };
+  pintarVentanaTuits();
+  let enlacesDentro = [...otros];
+  if (enlaces.length) {
+    const partes = [];
+    const fallos = [];
+    for (const u of enlaces) {
+      const t = sinConexion() ? null : await leerTuit(u);
+      if (t) { partes.push(t.texto); estadoTuits.autor ||= t.autor; enlacesDentro.push(...t.enlaces); } else fallos.push(u);
+    }
+    if (!estadoTuits) return;
+    estadoTuits.texto = [estadoTuits.texto, ...partes].filter(Boolean).join('\n\n');
+    estadoTuits.fallos = fallos;
+    estadoTuits.leyendo = false;
+  }
+  estadoTuits.enlacesDentro = [...new Set(enlacesDentro)].filter(u => !esTuit(u));
+  await buscarCandidatos();
+}
+
+async function buscarCandidatos(soloNuevo) {
+  const et = estadoTuits;
+  if (!et) return;
+  if (!soloNuevo) {
+    et.grupos = candidatosDeTexto(et.texto).map(c => ({ ...c, estado: 'buscando', res: [] }));
+    for (const u of et.enlacesDentro || []) et.grupos.unshift({ q: u, como: 'enlace', estado: 'buscando', res: [] });
+    for (const q of et.extras || []) if (!et.grupos.some(g => g.q.toLowerCase() === q.toLowerCase())) et.grupos.push({ q, como: Buscador.tipoDe(q).tipo === 'isbn' ? 'isbn' : 'manual', estado: 'buscando', res: [] });
+  }
+  pintarVentanaTuits();
+  if (sinConexion()) { et.sinRed = true; et.grupos.forEach(g => { if (g.estado === 'buscando') { g.estado = 'pend'; g.pendMarcado = g.como !== 'texto'; } }); pintarVentanaTuits(); return; }
+  await Promise.all(et.grupos.filter(g => g.estado === 'buscando').map(async g => {
+    if (g.como === 'enlace' || g.como === 'isbn') {
+      const r = await Buscador.resolver(g.q);
+      g.res = r?.d ? [r.d] : [];
+    } else {
+      g.res = (await Buscador.buscarTexto(g.q)).slice(0, 3);
+    }
+    g.estado = 'hecho';
+    g.res.forEach((d, i) => { d._marcado = i === 0 && g.como !== 'texto' && !libroExiste(d); d._ya = !!libroExiste(d); });
+    if (estadoTuits === et) pintarGruposTuits();
+  }));
+  if (estadoTuits === et) pintarVentanaTuits();
+}
+
+function pintarVentanaTuits() {
+  const et = estadoTuits;
+  if (!$('#ventana-tuits')) {
+    abrirVentana({
+      titulo: 'Libros del tuit',
+      alCerrar: () => { estadoTuits = null; },
+      cuerpo: `<div id="ventana-tuits" style="display:flex;flex-direction:column;gap:12px"></div>`,
+    });
+  }
+  const c = $('#ventana-tuits');
+  if (!c) return;
+  const avisoFallo = et.fallos?.length
+    ? `<div class="consejo">${icono('x')}<p>${et.fallos.length === 1 ? 'No he podido leer el tuit' : 'No he podido leer ' + et.fallos.length + ' tuits'} (puede ser privado, estar borrado o X no deja verlo). Copia su texto y pégalo en el cuadro de abajo. ${esIPhone() ? 'Truco: haz una captura de pantalla, ábrela en Fotos, mantén pulsado el texto y elige «Copiar».' : ''}</p></div>` : '';
+  c.innerHTML = `
+    ${et.leyendo ? `<p class="ayuda"><span class="cargando"></span> Leyendo el tuit…</p>` : ''}
+    ${avisoFallo}
+    <label class="etiqueta-campo">${et.captura ? 'Texto leído de la captura (borra lo que sobre y pulsa «Buscar otra vez»)' : 'Texto del tuit' + (et.autor ? ' de ' + esc(et.autor) : '')}
+      <textarea class="campo tuit-texto" id="tuit-texto" rows="${et.captura ? 6 : 4}" placeholder="Pega aquí el texto del tuit">${esc(et.texto)}</textarea></label>
+    <div class="fila-campo" style="flex-wrap:wrap"><button type="button" class="boton" data-accion="tuit-rebuscar">${icono('buscar')} Buscar otra vez</button></div>
+    <div id="grupos-tuit" style="display:flex;flex-direction:column;gap:10px"></div>
+    <form class="fila-campo" data-form="tuit-titulo"><input class="campo" id="tuit-titulo" placeholder="¿Falta alguno? Escribe su título" autocomplete="off"><button class="boton" type="submit">Buscar</button></form>
+    <div class="fila-campo" style="flex-wrap:wrap;align-items:center">
+      <label class="etiqueta-campo" style="flex-direction:row;align-items:center;gap:8px">Guardar en
+        <select class="campo" id="destino-tuit" style="width:auto;min-height:38px">
+          ${['Cajón de sastre', 'Quiero leerlo'].map(e => `<option ${e === et.destino ? 'selected' : ''}>${esc(e)}</option>`).join('')}
+        </select></label>
+      <span class="espacio"></span>
+      <button type="button" class="boton principal" data-accion="tuit-guardar" id="tuit-guardar">Guardar los marcados</button>
+    </div>`;
+  pintarGruposTuits();
+}
+
+function pintarGruposTuits() {
+  const et = estadoTuits;
+  const c = $('#grupos-tuit');
+  if (!c || !et) return;
+  // El mismo libro puede salir en dos sitios del tuit: solo se enseña la primera vez
+  const vistos = new Set();
+  for (const g of et.grupos) for (const d of g.res) {
+    const k = (d.titulo + '|' + d.autores).toLowerCase();
+    d._dup = vistos.has(k);
+    if (d._dup) d._marcado = false;
+    vistos.add(k);
+  }
+  if (!et.grupos.length) {
+    c.innerHTML = et.leyendo ? '' : `<p class="ayuda">No he visto ningún título. Escríbelo abajo o corrige el texto.</p>`;
+  } else {
+    c.innerHTML = et.grupos.map((g, gi) => {
+      const cab = { enlace: 'Enlace del tuit', isbn: 'ISBN', comillas: 'Entre comillas', lista: 'En el texto', texto: 'No había títulos claros; busco con el principio del texto', manual: 'Escrito por ti' }[g.como];
+      let cuerpo;
+      if (g.estado === 'buscando') cuerpo = `<p class="ayuda"><span class="cargando"></span> Buscando…</p>`;
+      else if (g.estado === 'pend') cuerpo = `<label class="resultado"><input type="checkbox" data-tuit="${gi}" data-i="-1" ${g.pendMarcado ? 'checked' : ''}><span style="min-width:0"><b>${esc(g.q)}</b><small>Sin conexión: se guarda así y se completa cuando vuelva la cobertura</small></span></label>`;
+      else if (!g.res.length) cuerpo = `<p class="ayuda">No he encontrado nada.</p>`;
+      else if (g.res.every(d => d._dup)) return '';
+      else cuerpo = g.res.map((d, i) => d._dup ? '' : `<label class="resultado"><input type="checkbox" data-tuit="${gi}" data-i="${i}" ${d._marcado ? 'checked' : ''} ${d._ya ? 'disabled' : ''}>
+        ${portadaHTML(d, 'media')}<span style="min-width:0"><b>${esc(d.titulo)}</b><small>${esc(d.autores)}</small><small>${d._ya ? 'Ya lo tienes' : esc([d.editorial, String(d.fechaPublicacion || '').slice(0, 4)].filter(Boolean).join(' · '))}</small></span></label>`).join('');
+      return `<div class="grupo-candidato"><p>${esc(cab)}: <b>${esc(g.q.length > 70 ? g.q.slice(0, 70) + '…' : g.q)}</b></p><div class="resultados">${cuerpo}</div></div>`;
+    }).join('');
+  }
+  const n = et.grupos.reduce((s, g) => s + g.res.filter(d => d._marcado).length + (g.estado === 'pend' && g.pendMarcado ? 1 : 0), 0);
+  const b = $('#tuit-guardar');
+  if (b) { b.textContent = n === 1 ? 'Guardar 1 libro' : n ? `Guardar ${n} libros` : 'Guardar los marcados'; b.disabled = !n; }
+}
+
+async function guardarLibrosTuit() {
+  const et = estadoTuits;
+  if (!et) return;
+  const destino = $('#destino-tuit')?.value || et.destino;
+  const b = $('#tuit-guardar');
+  if (b) { b.disabled = true; b.innerHTML = '<span class="cargando"></span> Guardando…'; }
+  const origen = (et.enlaces[0] || '').split(/[?#]/)[0];
+  const nota = 'Visto en X' + (et.autor ? ' (' + et.autor + ')' : '') + (origen ? ': ' + origen : '');
+  let n = 0;
+  for (const g of et.grupos) {
+    if (g.estado === 'pend') {
+      if (!g.pendMarcado) continue;
+      const l = libroPendiente(Buscador.tipoDe(g.q), destino);
+      l.notas = nota;
+      l.etiquetas = ['tuiter'];
+      await anadirLibro(l);
+      n++;
+      continue;
+    }
+    for (const d0 of g.res) {
+      if (!d0._marcado || libroExiste(d0)) continue;
+      const { _marcado, _ya, ...d1 } = d0;
+      const d = await Buscador.completar(d1);
+      if (libroExiste(d)) continue;
+      const l = nuevoLibro(d, destino);
+      l.notas = nota;
+      l.etiquetas = ['tuiter'];
+      await anadirLibro(l);
+      n++;
+    }
+  }
+  estadoTuits = null;
+  E.vista = 'libros';
+  cerrarVentana();
+  pintarColumna();
+  avisar(n === 1 ? `1 libro guardado en «${destino}»` : `${n} libros guardados en «${destino}»`);
+}
+
+/** Lee el texto de una captura de pantalla (pantallas claras u oscuras). */
+async function leerCaptura(archivo) {
+  const dataURL = await comprimirImagen(archivo, 2200, 0.9);
+  const t = await trabajador('es');
+  const img = await cargarImagen(dataURL);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const datos = ctx.getImageData(0, 0, c.width, c.height);
+  const d = datos.data;
+  let suma = 0;
+  for (let i = 0; i < d.length; i += 16) suma += d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+  const oscura = suma / (d.length / 16) < 110;
+  for (let i = 0; i < d.length; i += 4) {
+    let g = d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+    if (oscura) g = 255 - g;
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(datos, 0, 0);
+  await t.setParameters({ tessedit_pageseg_mode: '3' });
+  const { data } = await t.recognize(c);
+  // Fuera lo típico de la interfaz de X: horas, contadores, «Responder», «Traducir»…
+  return (data.lines || []).map(l => (l.text || '').trim())
+    .filter(l => l && !/^[\d\s.,:·KkMm%]+$/.test(l) && !/^(Responder|Reply|Traducir|Translate|Mostrar|Show|Ver |Repost|Retuit|Me gusta|Like|Seguir|Follow|Anuncio|Ad)\b/i.test(l))
+    .join('\n');
+}
+
+/** Enlace para arrastrar a la barra de marcadores del ordenador: manda la página que estás viendo a Mis Libros. */
+function marcadorOrdenador() {
+  const app = location.origin + location.pathname;
+  return `javascript:void(open('${app}?pegar='+encodeURIComponent(location.href)))`;
+}
+
 async function procesarPegado() {
   const texto = $('#pegado')?.value || '';
   const entradas = entradasPegadas(texto);
   if (!entradas.length) { avisar('Pega antes algún enlace, ISBN o título'); return; }
   const destino = $('#destino').value;
+  // Tuits: enlaces de X o un texto largo copiado de un tuit
+  const tuits = entradas.filter(esTuit);
+  const sinEnlaces = texto.replace(/https?:\/\/\S+/g, ' ').trim();
+  const lineasLargas = sinEnlaces.split(/\n/).some(l => l.trim().split(/\s+/).length > 8);
+  const pareceTuit = !!sinEnlaces && (/(^|\s)@\w{2,}/.test(sinEnlaces) || (lineasLargas && sinEnlaces.split(/\s+/).length > 12));
+  if (tuits.length || pareceTuit) {
+    const otros = entradas.filter(e => /^https?:/i.test(e) && !esTuit(e));
+    const extras = pareceTuit ? [] : entradas.filter(e => !/^https?:/i.test(e));
+    ventanaTuits({ enlaces: tuits, texto: pareceTuit ? sinEnlaces : '', otros, extras, destino });
+    return;
+  }
   const cont = $('#progreso-pegado');
   $('[data-accion="procesar-pegado"]').disabled = true;
   const filas = entradas.map(e => ({ entrada: e, estado: 'cola', titulo: '' }));
@@ -1946,6 +2213,13 @@ const acciones = {
     }
   },
   'procesar-pegado': () => procesarPegado(),
+  'tuit-rebuscar': () => {
+    if (!estadoTuits) return;
+    estadoTuits.texto = $('#tuit-texto')?.value || '';
+    estadoTuits.fallos = [];
+    buscarCandidatos();
+  },
+  'tuit-guardar': () => guardarLibrosTuit(),
 
   'abrir-cita': b => ventanaCita(b.dataset.id),
   'lanzar-atajo': b => {
@@ -2068,6 +2342,13 @@ document.addEventListener('submit', async e => {
     buscarYAnadirIsbn(isbn);
   }
   if (tipo === 'titulo') buscarPorTitulo($('#consulta').value);
+  if (tipo === 'tuit-titulo' && estadoTuits) {
+    const q = $('#tuit-titulo').value.trim();
+    if (!q) return;
+    $('#tuit-titulo').value = '';
+    estadoTuits.grupos.push({ q, como: Buscador.tipoDe(q).tipo === 'isbn' ? 'isbn' : 'manual', estado: 'buscando', res: [] });
+    buscarCandidatos(true);
+  }
   if (tipo === 'mano') {
     const titulo = $('#titulo-mano').value.trim();
     if (!titulo) return;
@@ -2122,6 +2403,14 @@ document.addEventListener('change', async e => {
   if (t.id === 'filtro-etiqueta') { E.filtro.etiqueta = t.value; pintarColumna(); return; }
   if (t.dataset.repintar) { pintarFicha(); return; }
   if (t.dataset.catColor !== undefined || t.dataset.catNombre !== undefined) return;
+  if (t.dataset.tuit !== undefined && estadoTuits) {
+    const g = estadoTuits.grupos[+t.dataset.tuit];
+    if (!g) return;
+    if (+t.dataset.i < 0) g.pendMarcado = t.checked;
+    else if (g.res[+t.dataset.i]) g.res[+t.dataset.i]._marcado = t.checked;
+    pintarGruposTuits();
+    return;
+  }
   const archivo = t.dataset.archivo;
   if (!archivo || !t.files?.length) return;
   const archivos = [...t.files];
@@ -2146,6 +2435,20 @@ document.addEventListener('change', async e => {
     }
     pintarTodo();
     if (ultima && archivos.length === 1) ventanaCita(ultima.id, true);
+  }
+  if (archivo === 'captura') {
+    const destino = $('#destino')?.value || 'Cajón de sastre';
+    const p = $('#progreso-pegado');
+    if (p) p.innerHTML = '<div><span class="cargando"></span><span>Leyendo la captura… (la primera vez tarda un poco)</span></div>';
+    try {
+      const texto = await leerCaptura(archivos[0]);
+      if (!texto.trim()) { if (p) p.innerHTML = ''; avisar('No he podido leer texto en la captura'); return; }
+      ventanaTuits({ texto, destino, captura: true });
+    } catch (err) {
+      if (p) p.innerHTML = '';
+      avisar(err.message === 'sin-libreria' ? 'El lector de texto necesita conexión la primera vez' : 'No he podido leer la captura');
+    }
+    return;
   }
   if (archivo === 'codigo') {
     estadoEscaner('<span class="cargando"></span> Buscando el código en la foto…');
@@ -2201,6 +2504,16 @@ async function arrancar() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') completarPendientes(); });
   setTimeout(() => completarPendientes(), 2000);
   window.Sync?.arrancar();
+  // Llegada desde el marcador del ordenador: ?pegar=<dirección>
+  const llegado = new URLSearchParams(location.search).get('pegar');
+  if (llegado) {
+    history.replaceState(null, '', location.pathname);
+    ventanaAnadir('pegar');
+    setTimeout(() => {
+      const area = $('#pegado');
+      if (area) { area.value = llegado; procesarPegado(); }
+    }, 150);
+  }
   if (!persistente) avisar('Este navegador no deja guardar datos (¿modo privado?). Lo que añadas se perderá al cerrar.');
 }
 arrancar();
