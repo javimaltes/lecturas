@@ -198,13 +198,14 @@ const Sync = (() => {
         const borrados = { ...(r.borrados || {}) };
         for (const b of borradosLocales) if (!borrados[b.id] || borrados[b.id] < b.fecha) borrados[b.id] = b.fecha;
 
-        const final = { libros: [], citas: [], categorias: [] };
-        const traer = { libros: [], citas: [], categorias: [] };
-        const quitar = { libros: [], citas: [] };
-        for (const col of ['libros', 'citas', 'categorias']) {
+        const final = { libros: [], citas: [], categorias: [], palabras: [] };
+        const traer = { libros: [], citas: [], categorias: [], palabras: [] };
+        const quitar = { libros: [], citas: [], palabras: [] };
+        for (const col of ['libros', 'citas', 'categorias', 'palabras']) {
           const clave = col === 'categorias' ? 'orden' : 'id';
           const locales = new Map(E[col].map(o => [o[clave], o]));
           const remotos = new Map((r[col] || []).map(o => [o[clave], o]));
+          if (!E[col]) E[col] = [];
           for (const k of new Set([...locales.keys(), ...remotos.keys()])) {
             const L = locales.get(k);
             const R = remotos.get(k);
@@ -219,7 +220,7 @@ const Sync = (() => {
         }
 
         // 1) Traer lo que es más nuevo en el otro dispositivo
-        for (const col of ['libros', 'citas']) {
+        for (const col of ['libros', 'citas', 'palabras']) {
           for (const L of quitar[col]) {
             await BD.borrarCrudo(col, L.id);
             E[col] = E[col].filter(x => x.id !== L.id);
@@ -227,7 +228,7 @@ const Sync = (() => {
             huboCambiosAqui = true;
           }
         }
-        for (const col of ['libros', 'citas', 'categorias']) {
+        for (const col of ['libros', 'citas', 'categorias', 'palabras']) {
           for (const R of traer[col]) {
             const o = await desdeRemoto(col, R, c);
             await BD.ponerCrudo(col, o);
@@ -241,8 +242,8 @@ const Sync = (() => {
 
         // 2) Preparar la versión combinada (subiendo las fotos nuevas)
         const imagenes = new Set(r.imagenes || []);
-        const salida = { app: 'MisLibros', formato: 'sync-1', libros: [], citas: [], categorias: [], borrados };
-        for (const col of ['libros', 'citas', 'categorias']) {
+        const salida = { app: 'MisLibros', formato: 'sync-1', libros: [], citas: [], categorias: [], palabras: [], borrados };
+        for (const col of ['libros', 'citas', 'categorias', 'palabras']) {
           for (const { o, local } of final[col]) {
             const actual = local ? o : (col === 'categorias' ? E.categorias.find(x => x.orden === o.orden) : E[col].find(x => x.id === o.id)) || o;
             salida[col].push(await haciaRemoto(col, actual, c, imagenes));
@@ -250,11 +251,13 @@ const Sync = (() => {
         }
         salida.libros.sort((x, y) => String(x.id).localeCompare(String(y.id)));
         salida.citas.sort((x, y) => String(x.id).localeCompare(String(y.id)));
+        salida.palabras.sort((x, y) => String(x.id).localeCompare(String(y.id)));
         salida.categorias.sort((x, y) => x.orden - y.orden);
         salida.imagenes = [...imagenes].sort();
 
         // 3) Escribir solo si algo ha cambiado
         const sinFecha = d => { const x = { ...d }; delete x.actualizado; return estable(x); };
+        if (remoto && !remoto.palabras && !salida.palabras.length) delete salida.palabras;
         if (remoto && sinFecha(remoto) === sinFecha(salida)) break;
         salida.actualizado = ahora();
         if (await escribirDatos(c, salida, sha)) break;

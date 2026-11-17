@@ -4,11 +4,11 @@
    - Portadas: se guardan al verlas, para que también se vean sin cobertura.
    - Las búsquedas de datos de libros no se guardan (necesitan red de verdad). */
 
-const VERSION = 'mislibros-app-v4';
+const VERSION = 'mislibros-app-v5';
 const EXTERNOS = 'mislibros-externos-v1';
 const IMAGENES = 'mislibros-portadas-v1';
 
-const APP = ['./', 'index.html', 'app.js', 'sync.js', 'manifest.webmanifest', 'icono-180.png', 'icono-192.png', 'icono-512.png'];
+const APP = ['./', 'index.html', 'app.js', 'palabras.js', 'sync.js', 'manifest.webmanifest', 'icono-180.png', 'icono-192.png', 'icono-512.png'];
 const LIBRERIAS = [
   'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',

@@ -1,6 +1,6 @@
 MIS LIBROS (WEB) - CÓMO PUBLICARLA GRATIS EN GITHUB PAGES
 
-Son 8 archivos: index.html, app.js, sync.js, sw.js, manifest.webmanifest e icono-180/192/512.png
+Son 9 archivos: index.html, app.js, palabras.js, sync.js, sw.js, manifest.webmanifest e icono-180/192/512.png
 
 === 1. CREAR EL REPOSITORIO (una sola vez) ===
   github.com -> botón "+" (arriba a la derecha) -> New repository
@@ -11,7 +11,7 @@ Son 8 archivos: index.html, app.js, sync.js, sw.js, manifest.webmanifest e icono
 
 === 2. SUBIR LOS ARCHIVOS ===
   En la página del repositorio, pulsa "uploading an existing file".
-  Arrastra los 8 archivos (no hace falta este LEEME) y pulsa "Commit changes".
+  Arrastra los 9 archivos (no hace falta este LEEME) y pulsa "Commit changes".
 
 === 3. ENCENDER GITHUB PAGES ===
   Pestaña "Settings" del repositorio -> en el menú de la izquierda "Pages".
@@ -29,6 +29,20 @@ Son 8 archivos: index.html, app.js, sync.js, sw.js, manifest.webmanifest e icono
 === 5. EN EL ORDENADOR ===
   Abre la misma dirección en Chrome, Edge o Safari. En Chrome/Edge puedes
   instalarla como app con el icono de la barra de direcciones.
+
+=== CITAS EN EL IPHONE ===
+  En la ficha del libro: "Añadir cita" -> toca el cuadro de texto -> "Escanear texto".
+  El iPhone lee la página con la cámara: selecciona las líneas y pulsa "Insertar".
+
+=== PALABRAS Y TARJETAS ===
+  En la ficha del libro: "Buscar una palabra" (español, inglés o alemán).
+  Inglés y alemán: traducción al español + definiciones (Wiktionary, en inglés).
+  Español: definiciones en español (Wiktionary).
+  "Guardar tarjeta" y queda unida al libro. Pestaña "Palabras": todas, con filtros.
+  "Repasar": Otra vez / Difícil / Bien. Lo que sabes vuelve cada vez más tarde
+  (1, 3, 7, 16, 35 y 90 días); lo que fallas, enseguida.
+  En el ordenador: espacio = ver respuesta; 1, 2, 3 = Otra vez, Difícil, Bien.
+  Copia y ajustes -> "Palabras para Anki" exporta tu vocabulario.
 
 === SIN COBERTURA ===
   Abre la app al menos una vez CON conexión: desde entonces se abre también sin red.

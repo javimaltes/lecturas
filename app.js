@@ -83,18 +83,18 @@ const CATEGORIAS_INICIALES = [
 
 // Cada cambio queda fechado (campo "modificado") y cada borrado se apunta en "borrados":
 // así la sincronización sabe qué versión es la más reciente en cada dispositivo.
-const ALMACENES_SYNC = ['libros', 'citas', 'categorias'];
+const ALMACENES_SYNC = ['libros', 'citas', 'categorias', 'palabras'];
 const BD = {
   db: null,
   memoria: null, // si el navegador no deja guardar, se trabaja en memoria
   abrir() {
-    const vacia = () => ({ libros: {}, citas: {}, categorias: {}, borrados: {} });
+    const vacia = () => ({ libros: {}, citas: {}, categorias: {}, borrados: {}, palabras: {} });
     return new Promise(ok => {
       let r;
-      try { r = indexedDB.open('mislibros', 2); } catch { this.memoria = vacia(); return ok(false); }
+      try { r = indexedDB.open('mislibros', 3); } catch { this.memoria = vacia(); return ok(false); }
       r.onupgradeneeded = () => {
         const db = r.result;
-        for (const [n, k] of [['libros', 'id'], ['citas', 'id'], ['categorias', 'orden'], ['borrados', 'id']]) {
+        for (const [n, k] of [['libros', 'id'], ['citas', 'id'], ['categorias', 'orden'], ['borrados', 'id'], ['palabras', 'id']]) {
           if (!db.objectStoreNames.contains(n)) db.createObjectStore(n, { keyPath: k });
         }
       };
@@ -133,7 +133,7 @@ const BD = {
   },
   async borrar(a, id) {
     await this.borrarCrudo(a, id);
-    if (a === 'libros' || a === 'citas') await this.ponerCrudo('borrados', { id, fecha: ahora() });
+    if (a === 'libros' || a === 'citas' || a === 'palabras') await this.ponerCrudo('borrados', { id, fecha: ahora() });
     this._avisar(a);
   },
   // Versiones "crudas": sin fechar ni avisar (las usa la sincronización al traer datos).
@@ -154,6 +154,7 @@ const BD = {
 const E = {
   libros: [],
   citas: [],
+  palabras: [],
   categorias: [],
   vista: 'libros',
   sel: null,
@@ -679,8 +680,9 @@ function crearCopia() {
   return {
     app: 'MisLibros', version: 3, fecha: ahora(),
     categorias: E.categorias.map(c => ({ orden: c.orden, nombre: c.nombre, colorHex: c.colorHex })),
+    palabras: E.palabras.map(p => ({ ...p })),
     libros: E.libros.map(l => ({
-      isbn: l.isbn, titulo: l.titulo, autores: l.autores, editorial: l.editorial, fechaPublicacion: l.fechaPublicacion,
+      id: l.id, isbn: l.isbn, titulo: l.titulo, autores: l.autores, editorial: l.editorial, fechaPublicacion: l.fechaPublicacion,
       paginas: l.paginas || 0, descripcion: l.descripcion, portada: base64De(l.portada),
       portadaURL: l.portada && !l.portada.startsWith('data:') ? l.portada : undefined,
       estado: l.estado, procedencia: l.procedencia, lugar: l.lugar, fechaDevolucion: l.fechaDevolucion || undefined,
@@ -705,8 +707,10 @@ async function restaurarCopia(json) {
   let nuevos = 0;
   const librosNuevos = [];
   const citasNuevas = [];
+  const equivalencias = {}; // id del libro en la copia -> id aquí
   for (const e of copia.libros) {
-    if (libroExiste({ isbn: e.isbn || '', titulo: e.titulo || '', autores: e.autores || '' })) continue;
+    const ya = libroExiste({ isbn: e.isbn || '', titulo: e.titulo || '', autores: e.autores || '' });
+    if (ya) { if (e.id) equivalencias[e.id] = ya.id; continue; }
     const l = nuevoLibro({
       isbn: e.isbn, titulo: e.titulo, autores: e.autores, editorial: e.editorial, fechaPublicacion: e.fechaPublicacion,
       paginas: e.paginas, descripcion: e.descripcion, portada: e.portada ? dataURLDe(e.portada) : (e.portadaURL || ''),
@@ -716,6 +720,8 @@ async function restaurarCopia(json) {
       paginaActual: e.paginaActual || 0, notas: e.notas || '', fechaInicio: e.fechaInicio || null, fechaFin: e.fechaFin || null,
       fechaAlta: e.fechaAlta || ahora(), etiquetas: e.etiquetas || [],
     });
+    if (e.id && !libroPorId(e.id)) l.id = e.id;
+    if (e.id) equivalencias[e.id] = l.id;
     librosNuevos.push(l);
     E.libros.push(l);
     for (const s of e.subrayados || []) {
@@ -729,6 +735,15 @@ async function restaurarCopia(json) {
   await BD.ponerVarios('libros', librosNuevos);
   await BD.ponerVarios('citas', citasNuevas);
   E.citas.push(...citasNuevas);
+  const palabrasNuevas = [];
+  for (const p of copia.palabras || []) {
+    if (!p?.id || E.palabras.some(x => x.id === p.id)) continue;
+    palabrasNuevas.push({ ...p, libroId: equivalencias[p.libroId] || p.libroId });
+  }
+  if (palabrasNuevas.length) {
+    await BD.ponerVarios('palabras', palabrasNuevas);
+    E.palabras.push(...palabrasNuevas);
+  }
   E.libros.sort((a, b) => b.fechaAlta.localeCompare(a.fechaAlta));
   return nuevos;
 }
@@ -905,6 +920,7 @@ function pasaFiltros(l) {
 // ----- Columna de libros -----
 function pintarColumna() {
   if (E.vista === 'citas') return pintarCitas();
+  if (E.vista === 'palabras' && window.Palabras) return Palabras.pintarColumna();
   const c = $('#columna');
   const cuenta = id => E.libros.filter(l => l.estado === id).length;
   const etiquetas = todasLasEtiquetas();
@@ -1078,11 +1094,16 @@ function pintarFicha() {
     <section class="seccion">
       <h2>Citas y subrayados <span class="espacio"></span><span style="text-transform:none;letter-spacing:0;font-weight:400">${citas.length || ''}</span></h2>
       ${citas.length ? `<div class="miniaturas">${citas.map(miniaturaCita).join('')}</div>` : ''}
-      <div class="fila-campo">
-        <label class="boton principal">${icono('camara')} Añadir foto de una página<input type="file" accept="image/*" data-archivo="cita" multiple hidden></label>
+      <div class="fila-campo" style="flex-wrap:wrap">
+        <button type="button" class="boton principal" data-accion="nueva-cita">${icono('cita')} Añadir cita</button>
+        <label class="boton">${icono('camara')} Con foto de la página<input type="file" accept="image/*" data-archivo="cita" multiple hidden></label>
       </div>
-      <p class="ayuda">Haz una foto a la página que subrayaste (o elige una captura) y pasa el dedo por las líneas de la cita: se convierte en texto.</p>
+      <p class="ayuda">${esIPhone()
+        ? 'Lo mejor: pulsa «Añadir cita», toca el cuadro de texto y elige «Escanear texto». El iPhone lee la página con la cámara y solo tienes que seleccionar las líneas subrayadas.'
+        : 'Escríbela o pégala. También puedes añadir una foto de la página y pasar el ratón por las líneas para sacar el texto.'}</p>
     </section>
+
+    ${window.Palabras ? Palabras.seccionFicha(l) : ''}
 
     ${l.descripcion ? `<section class="seccion"><h2>Sinopsis</h2><textarea class="campo" data-campo="descripcion" rows="6">${esc(l.descripcion)}</textarea></section>` : ''}
 
@@ -1583,13 +1604,24 @@ async function procesarPegado() {
 }
 
 // ----- Cita -----
-function ventanaCita(id, empezarMarcando = false) {
+const esIPhone = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const citaVacia = c => !String(c.texto || '').trim() && !String(c.comentario || '').trim() && !c.imagen;
+
+function ventanaCita(id, empezarMarcando = false, enfocar = false) {
   const c = E.citas.find(x => x.id === id);
   if (!c) return;
   const l = libroPorId(c.libroId);
   abrirVentana({
     titulo: 'Cita',
+    // Una cita que se abrió y se dejó en blanco no se guarda.
+    alCerrar: () => {
+      if (citaVacia(c) && E.citas.includes(c)) {
+        E.citas = E.citas.filter(x => x !== c);
+        BD.borrar('citas', c.id);
+      }
+    },
     cuerpo: `
+      ${!c.texto && !c.imagen && esIPhone() ? `<div class="consejo">${icono('texto')}<p><b>Escanear texto:</b> toca el cuadro de abajo y, en el menú que aparece, elige «Escanear texto» (o el icono de un recuadro con líneas del teclado). Apunta a la página, selecciona las líneas subrayadas y pulsa «Insertar».</p></div>` : ''}
       <label class="etiqueta-campo">Texto de la cita
         <textarea class="campo" id="cita-texto" rows="5" style="font-family:var(--f-titulo);font-size:16px" placeholder="Escríbela o sácala de la foto">${esc(c.texto)}</textarea></label>
       <div class="fila-campo" style="flex-wrap:wrap">
@@ -1618,6 +1650,7 @@ function ventanaCita(id, empezarMarcando = false) {
   };
   ['#cita-texto', '#cita-comentario', '#cita-pagina'].forEach(s => $(s).addEventListener('input', guardar));
   if (empezarMarcando && c.imagen) ventanaMarcar(c.id);
+  else if (enfocar) $('#cita-texto').focus();
 }
 function chipsCategoria(sel) {
   return E.categorias.sort((a, b) => a.orden - b.orden).map(k => `<button type="button" data-accion="cat-cita" data-cat="${k.orden}" aria-pressed="${sel === k.orden}" style="--c:${esc(k.colorHex)}"><span class="punto" style="background:${esc(k.colorHex)}"></span>${esc(k.nombre)}</button>`).join('');
@@ -1743,12 +1776,13 @@ function ventanaCopia() {
       <div class="bloque-copia">
         <h3 class="seccion" style="margin:0;font-size:15px">Copia de seguridad</h3>
         <p class="ayuda">Además de sincronizar, conviene guardar de vez en cuando una copia en iCloud Drive, Google Drive o tu correo. Con la copia también puedes pasar libros de un dispositivo a otro a mano.</p>
-        <p class="ayuda">${ultima ? 'Última copia: ' + fechaCorta(ultima) + ' (' + hace(ultima) + ')' : '<b class="mal">Aún no has hecho ninguna copia.</b>'} · ${E.libros.length} libros, ${E.citas.length} citas</p>
+        <p class="ayuda">${ultima ? 'Última copia: ' + fechaCorta(ultima) + ' (' + hace(ultima) + ')' : '<b class="mal">Aún no has hecho ninguna copia.</b>'} · ${E.libros.length} libros, ${E.citas.length} citas, ${E.palabras.length} palabras</p>
         <div class="botones">
           <button type="button" class="boton principal" data-accion="exportar" data-que="json">${icono('descargar')} Guardar copia completa</button>
           <button type="button" class="boton" data-accion="exportar" data-que="html">Versión para leer (.html)</button>
           <button type="button" class="boton" data-accion="exportar" data-que="csv">Libros para Excel</button>
           <button type="button" class="boton" data-accion="exportar" data-que="citas">Citas para Excel</button>
+          <button type="button" class="boton" data-accion="exportar" data-que="palabras">Palabras para Anki</button>
         </div>
       </div>
       <div class="bloque-copia">
@@ -1780,7 +1814,7 @@ function abrirLibro(id) {
 }
 
 const acciones = {
-  vista: b => { E.vista = b.dataset.vista; if (E.vista === 'citas' && innerWidth < 920) E.sel = null; pintarTodo(); },
+  vista: b => { E.vista = b.dataset.vista; if (E.vista !== 'libros' && innerWidth < 920) E.sel = null; pintarTodo(); },
   anadir: () => ventanaAnadir(matchMedia('(pointer: coarse)').matches ? 'escanear' : 'buscar'),
   copia: () => ventanaCopia(),
   abrir: b => abrirLibro(b.dataset.id),
@@ -1838,6 +1872,14 @@ const acciones = {
   'procesar-pegado': () => procesarPegado(),
 
   'abrir-cita': b => ventanaCita(b.dataset.id),
+  'nueva-cita': () => {
+    const l = libroPorId(E.sel);
+    if (!l) return;
+    const c = { id: uid(), libroId: l.id, imagen: '', pagina: l.paginaActual || 0, comentario: '', texto: '', categoria: -1, fecha: ahora() };
+    E.citas.push(c);
+    BD.poner('citas', c);
+    ventanaCita(c.id, false, true);
+  },
   'volver-cita': b => ventanaCita(b.dataset.id),
   'marcar-cita': b => ventanaMarcar(b.dataset.id),
   'cat-cita': b => {
@@ -1886,6 +1928,7 @@ const acciones = {
       ajuste.guardar('ultimaCopia', ahora());
     } else if (q === 'html') await entregarArchivo(base + '.html', htmlLegible(), 'text/html');
     else if (q === 'csv') await entregarArchivo(base + '.csv', csvLibros(), 'text/csv');
+    else if (q === 'palabras') await entregarArchivo(base + '-palabras.csv', Palabras.csvAnki(), 'text/csv');
     else await entregarArchivo(base + '-citas.csv', csvCitas(), 'text/csv');
   },
 };
@@ -2048,7 +2091,7 @@ async function arrancar() {
   }
   const persistente = await BD.abrir();
   try { await navigator.storage?.persist?.(); } catch { /* el navegador decide */ }
-  [E.libros, E.citas, E.categorias] = await Promise.all([BD.todos('libros'), BD.todos('citas'), BD.todos('categorias')]);
+  [E.libros, E.citas, E.categorias, E.palabras] = await Promise.all([BD.todos('libros'), BD.todos('citas'), BD.todos('categorias'), BD.todos('palabras')]);
   for (const c of CATEGORIAS_INICIALES) {
     if (!E.categorias.some(k => k.orden === c.orden)) { E.categorias.push({ ...c }); await BD.ponerCrudo('categorias', { ...c }); }
   }
