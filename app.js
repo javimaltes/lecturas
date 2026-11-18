@@ -172,8 +172,34 @@ function nuevoLibro(d = {}, estado = 'Cajón de sastre') {
   };
 }
 const libroPorId = id => E.libros.find(l => l.id === id);
-const citasDe = id => E.citas.filter(c => c.libroId === id).sort((a, b) => (a.pagina - b.pagina) || a.fecha.localeCompare(b.fecha));
-const categoria = n => E.categorias.find(c => c.orden === n);
+const citasDe = id => {
+  const l = libroPorId(id);
+  return E.citas.filter(c => c.libroId === id).sort((a, b) => (posicionCita(a, l) - posicionCita(b, l)) || a.fecha.localeCompare(b.fecha));
+};
+/** Dónde está la cita en el libro, para ordenarlas: la página, o el porcentaje pasado a páginas si se sabe cuántas tiene. */
+function posicionCita(c, l) {
+  if (c.ubicacion === 'porcentaje') return l?.paginas ? (c.porcentaje || 0) / 100 * l.paginas : (c.porcentaje || 0);
+  return c.pagina || 0;
+}
+/** «p. 12», «37 %», con el capítulo si lo hay: «37 % · cap. 4». */
+function dondeCita(c, { capitulo = true, corto = false } = {}) {
+  const pos = c.ubicacion === 'porcentaje' ? (c.porcentaje ? String(c.porcentaje).replace('.', ',') + ' %' : '') : (c.pagina ? 'p. ' + c.pagina : '');
+  const cap = capitulo && c.capitulo ? (/^[\dIVXLCivxlc]+$/.test(c.capitulo.trim()) ? 'cap. ' : '') + c.capitulo.trim() : '';
+  if (corto) return pos || cap;
+  return [pos, cap].filter(Boolean).join(' · ');
+}
+/** Una cita nueva empieza como la última del libro: con página o con porcentaje (ebook). */
+function citaNueva(l, imagen = '') {
+  const ultima = E.citas.filter(x => x.libroId === l.id).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))[0];
+  const ebook = ultima?.ubicacion === 'porcentaje';
+  const c = { id: uid(), libroId: l.id, imagen, pagina: ebook ? 0 : (l.paginaActual || 0), comentario: '', texto: '', categoria: -1, fecha: ahora() };
+  if (ebook) { c.ubicacion = 'porcentaje'; c.porcentaje = 0; }
+  if (ultima?.capitulo) c.capitulo = ultima.capitulo;
+  return c;
+}
+const categoria = n => E.categorias.find(c => c.orden === n && !c.borrada);
+const categoriasVisibles = () => E.categorias.filter(c => !c.borrada).sort((a, b) => a.orden - b.orden);
+const COLORES_NUEVAS = ['#AF52DE', '#5AC8FA', '#A2845E', '#FF3B30', '#30B0C7', '#8E8E93', '#FFCC00', '#00C7BE'];
 
 const pendientesGuardar = new Map();
 function guardarLibro(l, inmediato = false) {
@@ -688,7 +714,7 @@ function hoyArchivo() { return new Date().toISOString().slice(0, 10); }
 function crearCopia() {
   return {
     app: 'MisLibros', version: 3, fecha: ahora(),
-    categorias: E.categorias.map(c => ({ orden: c.orden, nombre: c.nombre, colorHex: c.colorHex })),
+    categorias: E.categorias.map(c => ({ orden: c.orden, nombre: c.nombre, colorHex: c.colorHex, borrada: c.borrada || undefined })),
     palabras: E.palabras.map(p => ({ ...p })),
     libros: E.libros.map(l => ({
       id: l.id, isbn: l.isbn, titulo: l.titulo, autores: l.autores, editorial: l.editorial, fechaPublicacion: l.fechaPublicacion,
@@ -697,9 +723,11 @@ function crearCopia() {
       estado: l.estado, procedencia: l.procedencia, lugar: l.lugar, fechaDevolucion: l.fechaDevolucion || undefined,
       paginaActual: l.paginaActual || 0, notas: l.notas, fechaInicio: l.fechaInicio || undefined,
       fechaFin: l.fechaFin || undefined, fechaAlta: l.fechaAlta, etiquetas: l.etiquetas || [],
+      notasPagina: (l.notasPagina || []).length ? l.notasPagina : undefined,
       subrayados: citasDe(l.id).map(c => ({
         imagen: base64De(c.imagen), pagina: c.pagina || 0, comentario: c.comentario, fecha: c.fecha,
         texto: c.texto, categoria: c.categoria,
+        ubicacion: c.ubicacion || undefined, porcentaje: c.porcentaje || undefined, capitulo: c.capitulo || undefined,
       })),
     })),
   };
@@ -709,6 +737,7 @@ async function restaurarCopia(json) {
   if (!copia || !Array.isArray(copia.libros)) throw new Error('no es una copia');
   for (const ce of copia.categorias || []) {
     const c = { orden: ce.orden, nombre: ce.nombre, colorHex: ce.colorHex };
+    if (ce.borrada) c.borrada = true;
     const i = E.categorias.findIndex(x => x.orden === c.orden);
     if (i >= 0) E.categorias[i] = c; else E.categorias.push(c);
     await BD.poner('categorias', c);
@@ -728,6 +757,7 @@ async function restaurarCopia(json) {
       procedencia: e.procedencia || 'Mío', lugar: e.lugar || '', fechaDevolucion: e.fechaDevolucion || null,
       paginaActual: e.paginaActual || 0, notas: e.notas || '', fechaInicio: e.fechaInicio || null, fechaFin: e.fechaFin || null,
       fechaAlta: e.fechaAlta || ahora(), etiquetas: e.etiquetas || [],
+      notasPagina: Array.isArray(e.notasPagina) ? e.notasPagina : [],
     });
     if (e.id && !libroPorId(e.id)) l.id = e.id;
     if (e.id) equivalencias[e.id] = l.id;
@@ -737,6 +767,8 @@ async function restaurarCopia(json) {
       citasNuevas.push({
         id: uid(), libroId: l.id, imagen: dataURLDe(s.imagen), pagina: s.pagina || 0, comentario: s.comentario || '',
         texto: s.texto || '', categoria: s.categoria ?? -1, fecha: s.fecha || ahora(),
+        ...(s.ubicacion === 'porcentaje' ? { ubicacion: 'porcentaje', porcentaje: s.porcentaje || 0 } : {}),
+        ...(s.capitulo ? { capitulo: s.capitulo } : {}),
       });
     }
     nuevos++;
@@ -769,10 +801,10 @@ function csvLibros() {
   ]);
 }
 function csvCitas() {
-  const filas = [['Cita', 'Categoría', 'Libro', 'Autor', 'Página', 'Comentario', 'Fecha']];
+  const filas = [['Cita', 'Categoría', 'Libro', 'Autor', 'Dónde (página o %, capítulo)', 'Comentario', 'Fecha']];
   for (const c of E.citas) {
     const l = libroPorId(c.libroId);
-    filas.push([c.texto, categoria(c.categoria)?.nombre || '', l?.titulo || '', l?.autores || '', c.pagina || '', c.comentario, fechaCorta(c.fecha)]);
+    filas.push([c.texto, categoria(c.categoria)?.nombre || '', l?.titulo || '', l?.autores || '', dondeCita(c), c.comentario, fechaCorta(c.fecha)]);
   }
   return csv(filas);
 }
@@ -786,7 +818,7 @@ function htmlLegible() {
     const citas = citasDe(l.id).map(c => {
       const cat = categoria(c.categoria);
       return `<div class="cita" style="border-left-color:${esc(cat?.colorHex || '#ccc')}">
-        <div class="etq">${cat ? `<span class="cat" style="border-color:${esc(cat.colorHex)}">${esc(cat.nombre)}</span>` : ''}${c.pagina ? `<span class="pag">p. ${c.pagina}</span>` : ''}</div>
+        <div class="etq">${cat ? `<span class="cat" style="border-color:${esc(cat.colorHex)}">${esc(cat.nombre)}</span>` : ''}${dondeCita(c) ? `<span class="pag">${esc(dondeCita(c))}</span>` : ''}</div>
         ${c.texto ? `<blockquote>“${esc(c.texto)}”</blockquote>` : ''}
         ${c.comentario ? `<p class="coment">${esc(c.comentario)}</p>` : ''}
         ${c.imagen ? `<details><summary>Ver foto de la página</summary><img class="sub" src="${c.imagen}" alt=""></details>` : ''}
@@ -797,6 +829,7 @@ function htmlLegible() {
       <p class="meta">${esc([l.editorial, l.fechaPublicacion, l.isbn && 'ISBN ' + l.isbn].filter(Boolean).join(' · '))}</p>
       ${(l.etiquetas || []).length ? `<p class="tags">${l.etiquetas.map(e => '#' + esc(e)).join(' ')}</p>` : ''}</div></div>
       ${l.notas ? `<h3>Mis notas</h3><p class="notas">${esc(l.notas).replace(/\n/g, '<br>')}</p>` : ''}
+      ${(l.notasPagina || []).length ? `<h3>Notas por página</h3>${[...l.notasPagina].sort((a, b) => a.pagina - b.pagina).map(n => `<p class="notas"><b>${n.pagina ? 'p. ' + n.pagina : 's/p'}</b> · ${esc(n.texto).replace(/\n/g, '<br>')}</p>`).join('')}` : ''}
       ${citas ? `<h3>Citas y subrayados</h3>${citas}` : ''}</article>`;
   }).join('\n');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mis Libros</title>
@@ -1157,7 +1190,7 @@ function pintarFicha() {
       <h2>Mi avance</h2>
       <div class="avance-control">
         <span>Voy por la página</span>
-        <input class="campo" type="number" min="0" inputmode="numeric" data-campo="paginaActual" data-tipo="numero" value="${l.paginaActual || 0}">
+        ${campoPagina({ attrs: `data-campo="paginaActual" data-tipo="numero"${l.paginas ? ` max="${l.paginas}"` : ''}`, valor: l.paginaActual || 0 })}
         ${l.paginas ? `<span class="ayuda" style="font-size:15px">de ${l.paginas}</span><span class="espacio"></span><span class="porcentaje" id="porcentaje">${pct} %</span>` : ''}
       </div>
       ${l.paginas ? `<input type="range" min="0" max="${l.paginas}" step="1" value="${Math.min(l.paginaActual || 0, l.paginas)}" data-campo="paginaActual" data-tipo="numero" aria-label="Página actual">` : `<p class="ayuda">Pon el número de páginas en «Datos del libro» para ver el porcentaje.</p>`}
@@ -1177,6 +1210,8 @@ function pintarFicha() {
       <h2>Mis notas</h2>
       <textarea class="campo" data-campo="notas" rows="4" placeholder="Lo que me ha parecido, quién me lo recomendó, frases sueltas…">${esc(l.notas)}</textarea>
     </section>
+
+    ${seccionNotasPagina(l)}
 
     <section class="seccion">
       <h2>Citas y subrayados <span class="espacio"></span><span style="text-transform:none;letter-spacing:0;font-weight:400">${citas.length || ''}</span></h2>
@@ -1222,7 +1257,7 @@ function miniaturaCita(c) {
     ? `<span class="cita-corta">${esc(c.texto)}</span>`
     : c.imagen ? `<img src="${c.imagen}" alt="">` : '';
   return `<button type="button" class="miniatura" data-accion="abrir-cita" data-id="${c.id}" style="border-color:${esc(cat?.colorHex || 'var(--linea)')}" title="${esc(cat?.nombre || 'Sin categoría')}">
-    ${dentro}${c.pagina ? `<span class="pag">p. ${c.pagina}</span>` : ''}</button>`;
+    ${dentro}${dondeCita(c, { corto: true }) ? `<span class="pag">${esc(dondeCita(c, { corto: true }))}</span>` : ''}</button>`;
 }
 
 // ----- Columna de citas -----
@@ -1234,7 +1269,7 @@ function pintarCitas() {
     <div class="caja-busqueda">${icono('buscar')}<input id="buscar-citas" class="campo" type="search" placeholder="Buscar en tus citas" value="${esc(f.texto)}" autocomplete="off"></div>
     <div class="chips-categoria">
       <button type="button" data-accion="filtro-cat" data-cat="-1" aria-pressed="${f.cat === -1}">Todas</button>
-      ${E.categorias.sort((a, b) => a.orden - b.orden).map(k => `<button type="button" data-accion="filtro-cat" data-cat="${k.orden}" aria-pressed="${f.cat === k.orden}" style="--c:${esc(k.colorHex)}"><span class="punto" style="background:${esc(k.colorHex)}"></span>${esc(k.nombre)}</button>`).join('')}
+      ${categoriasVisibles().map(k => `<button type="button" data-accion="filtro-cat" data-cat="${k.orden}" aria-pressed="${f.cat === k.orden}" style="--c:${esc(k.colorHex)}"><span class="punto" style="background:${esc(k.colorHex)}"></span>${esc(k.nombre || 'Sin nombre')}</button>`).join('')}
       <button type="button" class="boton plano" data-accion="categorias">${icono('paleta')} Editar</button>
     </div>
     <div class="lista" id="lista-citas"></div>`;
@@ -1264,7 +1299,7 @@ function pintarListaCitas() {
 function tarjetaCita(c) {
   const l = libroPorId(c.libroId);
   const cat = categoria(c.categoria);
-  const pie = [l?.titulo, c.pagina ? 'p. ' + c.pagina : '', cat?.nombre].filter(Boolean).join(' · ');
+  const pie = [l?.titulo, dondeCita(c), cat?.nombre].filter(Boolean).join(' · ');
   return `<button type="button" class="tarjeta-cita" data-accion="abrir-cita" data-id="${c.id}">
     <span class="raya" style="background:${esc(cat?.colorHex || 'var(--linea)')}"></span>
     ${!c.texto && c.imagen ? `<img src="${c.imagen}" alt="">` : ''}
@@ -2028,9 +2063,17 @@ function ventanaCita(id, empezarMarcando = false, enfocar = false) {
       ${c.imagen && /iPhone|iPad/.test(navigator.userAgent) ? `<p class="nota-pequena">Truco: el iPhone lee el texto de las fotos muy bien. Abre la foto en la app Fotos, mantén el dedo sobre el texto, ajusta la selección, pulsa «Copiar» y luego «Pegar» aquí.</p>` : ''}
       <div class="seccion"><h2>Categoría <span class="espacio"></span><button type="button" class="boton plano" data-accion="categorias" style="text-transform:none;letter-spacing:0">${icono('paleta')} Editar</button></h2>
         <div class="chips-categoria" id="chips-cita">${chipsCategoria(c.categoria)}</div></div>
-      <div class="dos">
-        <label class="etiqueta-campo">Página<input class="campo" id="cita-pagina" type="number" min="0" inputmode="numeric" value="${c.pagina || ''}"></label>
-        <label class="etiqueta-campo">Libro<input class="campo" value="${esc(l?.titulo || '')}" disabled></label>
+      <div class="seccion"><h2>Dónde está</h2>
+        <div class="segmentos" id="cita-ubicacion" style="max-width:340px">
+          <button type="button" data-ubicacion="pagina" aria-pressed="${c.ubicacion !== 'porcentaje'}">Página</button>
+          <button type="button" data-ubicacion="porcentaje" aria-pressed="${c.ubicacion === 'porcentaje'}">% (ebook)</button>
+        </div>
+        <div class="fila-ubicacion">
+          <div class="etiqueta-campo" id="campo-cita-pagina" ${c.ubicacion === 'porcentaje' ? 'hidden' : ''}>Página${campoPagina({ id: 'cita-pagina', valor: c.pagina, attrs: l?.paginas ? `max="${l.paginas}"` : '' })}</div>
+          <div class="etiqueta-campo" id="campo-cita-porcentaje" ${c.ubicacion === 'porcentaje' ? '' : 'hidden'}>Porcentaje${campoPagina({ id: 'cita-porcentaje', valor: c.porcentaje, attrs: 'max="100"', etiqueta: 'Porcentaje', decimal: true })}</div>
+          <label class="etiqueta-campo" style="flex:1;min-width:140px"><span>Capítulo <span class="nota-pequena">(opcional)</span></span><input class="campo" id="cita-capitulo" value="${esc(c.capitulo || '')}" placeholder="4, o su título" autocomplete="off"></label>
+        </div>
+        <p class="nota-pequena">Kindle, Kobo y Libros enseñan el porcentaje leído abajo en la pantalla (toca abajo si no lo ves). Admite decimales: 37,5.</p>
       </div>
       <label class="etiqueta-campo">Comentario<textarea class="campo" id="cita-comentario" rows="3" placeholder="Por qué lo marqué, qué me hizo pensar…">${esc(c.comentario)}</textarea></label>
       ${c.imagen ? `<img class="foto-cita" src="${c.imagen}" alt="Foto de la página">` : ''}`,
@@ -2043,14 +2086,28 @@ function ventanaCita(id, empezarMarcando = false, enfocar = false) {
     c.texto = $('#cita-texto').value;
     c.comentario = $('#cita-comentario').value;
     c.pagina = parseInt($('#cita-pagina').value, 10) || 0;
+    const pct = parseFloat(String($('#cita-porcentaje').value).replace(',', '.'));
+    c.porcentaje = isFinite(pct) ? Math.min(100, Math.max(0, Math.round(pct * 10) / 10)) : 0;
+    const cap = $('#cita-capitulo').value.trim();
+    if (cap) c.capitulo = cap; else delete c.capitulo;
     BD.poner('citas', c);
   };
-  ['#cita-texto', '#cita-comentario', '#cita-pagina'].forEach(s => $(s).addEventListener('input', guardar));
+  ['#cita-texto', '#cita-comentario', '#cita-pagina', '#cita-porcentaje', '#cita-capitulo'].forEach(s => $(s).addEventListener('input', guardar));
+  $('#cita-ubicacion').addEventListener('click', e => {
+    const b = e.target.closest('[data-ubicacion]');
+    if (!b) return;
+    const pct = b.dataset.ubicacion === 'porcentaje';
+    if (pct) c.ubicacion = 'porcentaje'; else delete c.ubicacion;
+    $$('#cita-ubicacion [data-ubicacion]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    $('#campo-cita-pagina').hidden = pct;
+    $('#campo-cita-porcentaje').hidden = !pct;
+    guardar();
+  });
   if (empezarMarcando && c.imagen) ventanaMarcar(c.id);
   else if (enfocar) $('#cita-texto').focus();
 }
 function chipsCategoria(sel) {
-  return E.categorias.sort((a, b) => a.orden - b.orden).map(k => `<button type="button" data-accion="cat-cita" data-cat="${k.orden}" aria-pressed="${sel === k.orden}" style="--c:${esc(k.colorHex)}"><span class="punto" style="background:${esc(k.colorHex)}"></span>${esc(k.nombre)}</button>`).join('');
+  return categoriasVisibles().map(k => `<button type="button" data-accion="cat-cita" data-cat="${k.orden}" aria-pressed="${sel === k.orden}" style="--c:${esc(k.colorHex)}"><span class="punto" style="background:${esc(k.colorHex)}"></span>${esc(k.nombre || 'Sin nombre')}</button>`).join('');
 }
 
 // ----- Marcar la cita en la foto -----
@@ -2176,15 +2233,143 @@ function ventanaMarcar(id) {
 }
 
 // ----- Categorías -----
+let categoriaABorrar = null;
 function ventanaCategorias() {
   abrirVentana({
     titulo: 'Mis categorías',
-    cuerpo: `<p class="ayuda">Pon el nombre y el color que quieras. Las citas que ya tienes se actualizan solas.</p>
-      <div class="lista-categorias">${E.categorias.sort((a, b) => a.orden - b.orden).map(k => `<div>
-        <input type="color" value="${esc(k.colorHex)}" data-cat-color="${k.orden}" aria-label="Color de ${esc(k.nombre)}">
-        <input class="campo" value="${esc(k.nombre)}" data-cat-nombre="${k.orden}" aria-label="Nombre de la categoría"></div>`).join('')}</div>`,
+    alCerrar: () => { categoriaABorrar = null; },
+    cuerpo: `<p class="ayuda">Pon el nombre y el color que quieras, añade las que necesites o quita las que no uses. Las citas que ya tienes se actualizan solas.</p>
+      <div class="lista-categorias" id="lista-categorias"></div>
+      <button type="button" class="boton" data-accion="nueva-categoria" style="align-self:flex-start">${icono('mas')} Añadir categoría</button>`,
     pie: `<button type="button" class="boton principal" data-accion="cerrar-ventana">Hecho</button>`,
   });
+  pintarListaCategorias();
+}
+function pintarListaCategorias(enfocar) {
+  const c = $('#lista-categorias');
+  if (!c) return;
+  c.innerHTML = categoriasVisibles().map(k => {
+    if (categoriaABorrar === k.orden) {
+      const n = E.citas.filter(x => x.categoria === k.orden).length;
+      return `<div class="consejo" style="margin:0"><p>¿Quitar «${esc(k.nombre || 'sin nombre')}»?${n ? ` ${n === 1 ? 'La cita que la tiene se queda' : 'Las ' + n + ' citas que la tienen se quedan'} sin categoría (no se borran).` : ''}</p>
+        <span class="confirmar"><button type="button" class="boton peligro" data-accion="borrar-categoria" data-cat="${k.orden}">Quitar</button>
+        <button type="button" class="boton plano" data-accion="no-borrar-categoria">Cancelar</button></span></div>`;
+    }
+    return `<div>
+      <input type="color" value="${esc(k.colorHex)}" data-cat-color="${k.orden}" aria-label="Color de ${esc(k.nombre)}">
+      <input class="campo" value="${esc(k.nombre)}" data-cat-nombre="${k.orden}" placeholder="Nombre" aria-label="Nombre de la categoría">
+      <button type="button" class="boton plano icono" data-accion="preguntar-borrar-categoria" data-cat="${k.orden}" aria-label="Quitar ${esc(k.nombre)}" title="Quitar">${icono('papelera')}</button></div>`;
+  }).join('') || '<p class="ayuda">No tienes ninguna categoría.</p>';
+  if (enfocar != null) $(`[data-cat-nombre="${enfocar}"]`)?.focus();
+}
+async function nuevaCategoria() {
+  const usados = new Set(categoriasVisibles().map(k => k.colorHex.toUpperCase()));
+  const k = { orden: Math.max(Date.now(), ...E.categorias.map(x => x.orden + 1)), nombre: '', colorHex: COLORES_NUEVAS.find(c => !usados.has(c)) || COLORES_NUEVAS[E.categorias.length % COLORES_NUEVAS.length] };
+  E.categorias.push(k);
+  categoriaABorrar = null;
+  pintarListaCategorias(k.orden);
+  await BD.poner('categorias', k);
+}
+async function borrarCategoria(n) {
+  const k = E.categorias.find(x => x.orden === n);
+  if (!k) return;
+  // Se marca como quitada (en vez de borrarla) para que los demás dispositivos también se enteren
+  k.borrada = true;
+  await BD.poner('categorias', k);
+  const afectadas = E.citas.filter(c => c.categoria === n);
+  for (const c of afectadas) c.categoria = -1;
+  if (afectadas.length) await BD.ponerVarios('citas', afectadas);
+  if (E.filtroCitas?.cat === n) E.filtroCitas.cat = -1;
+  categoriaABorrar = null;
+  pintarListaCategorias();
+  refrescarCategoriasFuera();
+}
+/** Repinta los sitios donde salen las categorías (lista de citas y la cita abierta, si la hay). */
+function refrescarCategoriasFuera() {
+  if (E.vista === 'citas') pintarColumna();
+  const chips = $('#chips-cita');
+  const c = chips && E.citas.find(x => x.id === $('[data-accion="copiar-cita"]')?.dataset.id);
+  if (c) chips.innerHTML = chipsCategoria(c.categoria);
+}
+
+// ----- Campo de página con flechas (mantén pulsado para pasar más deprisa) -----
+function campoPagina({ id = '', attrs = '', valor = 0, etiqueta = 'Página', decimal = false } = {}) {
+  return `<span class="paso-num"><button type="button" class="paso" data-paso="-1" aria-label="${esc(etiqueta)} anterior" tabindex="-1">${icono('abajo')}</button><input class="campo" ${decimal ? 'type="text" inputmode="decimal"' : 'type="number" min="0" inputmode="numeric"'} ${id ? `id="${id}"` : ''} ${attrs} value="${valor ? (decimal ? String(valor).replace('.', ',') : valor) : ''}" aria-label="${esc(etiqueta)}"><button type="button" class="paso" data-paso="1" aria-label="${esc(etiqueta)} siguiente" tabindex="-1">${icono('arriba')}</button></span>`;
+}
+let repeticionPaso = null;
+function pasoPagina(boton) {
+  const input = boton.parentNode.querySelector('input');
+  if (!input) return;
+  const max = parseFloat(input.getAttribute('max'));
+  const decimal = input.inputMode === 'decimal';
+  const x = decimal ? (parseFloat(String(input.value).replace(',', '.')) || 0) : (parseInt(input.value, 10) || 0);
+  let v = Math.max(0, +boton.dataset.paso > 0 ? Math.floor(x) + 1 : Math.ceil(x) - 1);
+  if (max > 0) v = Math.min(v, max);
+  input.value = v;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function pararPaso() { clearTimeout(repeticionPaso?.t); clearInterval(repeticionPaso?.i); repeticionPaso = null; }
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest?.('.paso[data-paso]');
+  if (!b) return;
+  e.preventDefault(); // que no salte el teclado ni se seleccione nada
+  pararPaso();
+  pasoPagina(b);
+  repeticionPaso = { t: setTimeout(() => { repeticionPaso.i = setInterval(() => pasoPagina(b), 70); }, 450) };
+});
+['pointerup', 'pointercancel', 'pointerleave', 'blur'].forEach(n => (n === 'blur' ? window : document).addEventListener(n, pararPaso, true));
+document.addEventListener('click', e => {
+  const b = e.target.closest?.('.paso[data-paso]');
+  if (b && e.detail === 0) pasoPagina(b); // con teclado
+}, true);
+
+// ----- Notas por página -----
+function seccionNotasPagina(l) {
+  const notas = [...(l.notasPagina || [])].sort((a, b) => (a.pagina - b.pagina) || String(a.fecha).localeCompare(String(b.fecha)));
+  const ultima = (l.notasPagina || []).reduce((m, n) => (!m || String(n.fecha) > String(m.fecha) ? n : m), null);
+  const sugerida = l.paginaActual || ultima?.pagina || '';
+  return `<section class="seccion">
+      <h2>Notas por página <span class="espacio"></span><span style="text-transform:none;letter-spacing:0;font-weight:400">${notas.length || ''}</span></h2>
+      <form class="form-nota-pagina" data-form="nota-pagina">
+        <div class="fila"><span>Página</span>${campoPagina({ id: 'nota-pag', valor: sugerida, attrs: l.paginas ? `max="${l.paginas}"` : '' })}</div>
+        <textarea class="campo" id="nota-texto" rows="2" placeholder="Lo que quieras apuntar sobre esa página"></textarea>
+        <button class="boton" type="submit" style="align-self:flex-start">${icono('mas')} Añadir nota</button>
+      </form>
+      ${notas.length ? `<div class="notas-pagina">${notas.map(n => `<button type="button" class="nota-pagina" data-accion="abrir-nota-pagina" data-id="${n.id}"><span class="pag">${n.pagina ? 'p. ' + n.pagina : 's/p'}</span><span>${esc(n.texto)}</span></button>`).join('')}</div>` : ''}
+    </section>`;
+}
+async function anadirNotaPagina() {
+  const l = libroPorId(E.sel);
+  const texto = $('#nota-texto')?.value.trim();
+  if (!l) return;
+  if (!texto) { $('#nota-texto')?.focus(); avisar('Escribe la nota'); return; }
+  const pagina = Math.max(0, parseInt($('#nota-pag').value, 10) || 0);
+  (l.notasPagina ||= []).push({ id: uid(), pagina, texto, fecha: ahora() });
+  await guardarLibro(l, true);
+  pintarFicha();
+  setTimeout(() => $('#nota-pag')?.closest('.seccion')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
+  avisar(pagina ? `Nota guardada en la página ${pagina}` : 'Nota guardada');
+}
+function ventanaNotaPagina(id) {
+  const l = libroPorId(E.sel);
+  const n = l?.notasPagina?.find(x => x.id === id);
+  if (!n) return;
+  abrirVentana({
+    titulo: 'Nota de la página',
+    cuerpo: `<div class="form-nota-pagina">
+        <div class="fila"><span>Página</span>${campoPagina({ id: 'editar-nota-pag', valor: n.pagina, attrs: l.paginas ? `max="${l.paginas}"` : '' })}</div>
+        <textarea class="campo" id="editar-nota-texto" rows="6">${esc(n.texto)}</textarea></div>`,
+    pie: `<button type="button" class="boton plano peligro" data-accion="borrar-nota-pagina" data-id="${n.id}">${icono('papelera')} Borrar</button><span class="espacio"></span>
+      <button type="button" class="boton principal" data-accion="cerrar-ventana">Hecho</button>`,
+    alCerrar: () => pintarFicha(),
+  });
+  const guardar = () => {
+    n.pagina = Math.max(0, parseInt($('#editar-nota-pag').value, 10) || 0);
+    n.texto = $('#editar-nota-texto').value;
+    guardarLibro(l);
+  };
+  $('#editar-nota-pag').addEventListener('input', guardar);
+  $('#editar-nota-texto').addEventListener('input', guardar);
 }
 
 // ----- Copia de seguridad y ajustes -----
@@ -2331,7 +2516,7 @@ const acciones = {
   'nueva-cita': () => {
     const l = libroPorId(E.sel);
     if (!l) return;
-    const c = { id: uid(), libroId: l.id, imagen: '', pagina: l.paginaActual || 0, comentario: '', texto: '', categoria: -1, fecha: ahora() };
+    const c = citaNueva(l);
     E.citas.push(c);
     BD.poner('citas', c);
     ventanaCita(c.id, false, true);
@@ -2371,10 +2556,23 @@ const acciones = {
   'copiar-cita': async b => {
     const c = E.citas.find(x => x.id === b.dataset.id);
     const l = libroPorId(c.libroId);
-    const texto = `“${c.texto}”\n— ${l?.titulo || ''}${l?.autores ? ', ' + l.autores : ''}${c.pagina ? ' (p. ' + c.pagina + ')' : ''}`;
+    const texto = `“${c.texto}”\n— ${l?.titulo || ''}${l?.autores ? ', ' + l.autores : ''}${dondeCita(c) ? ' (' + dondeCita(c) + ')' : ''}`;
     try { await navigator.clipboard.writeText(texto); avisar('Cita copiada'); } catch { avisar('No se ha podido copiar'); }
   },
   categorias: () => ventanaCategorias(),
+  'nueva-categoria': () => nuevaCategoria(),
+  'preguntar-borrar-categoria': b => { categoriaABorrar = +b.dataset.cat; pintarListaCategorias(); },
+  'no-borrar-categoria': () => { categoriaABorrar = null; pintarListaCategorias(); },
+  'borrar-categoria': b => borrarCategoria(+b.dataset.cat),
+  'abrir-nota-pagina': b => ventanaNotaPagina(b.dataset.id),
+  'borrar-nota-pagina': async b => {
+    const l = libroPorId(E.sel);
+    if (!l) return;
+    l.notasPagina = (l.notasPagina || []).filter(n => n.id !== b.dataset.id);
+    await guardarLibro(l, true);
+    cerrarVentana();
+    avisar('Nota borrada');
+  },
 
   exportar: async b => {
     const q = b.dataset.que;
@@ -2432,6 +2630,7 @@ document.addEventListener('submit', async e => {
     buscarYAnadirIsbn(isbn);
   }
   if (tipo === 'titulo') buscarPorTitulo($('#consulta').value);
+  if (tipo === 'nota-pagina') anadirNotaPagina();
   if (tipo === 'portadas') pintarPortadas($('#consulta-portada').value.trim(), '');
   if (tipo === 'tuit-titulo' && estadoTuits) {
     const q = $('#tuit-titulo').value.trim();
@@ -2461,6 +2660,8 @@ document.addEventListener('input', e => {
     const k = categoria(+t.dataset.catNombre);
     k.nombre = t.value;
     BD.poner('categorias', k);
+    clearTimeout(temporizadorLista);
+    temporizadorLista = setTimeout(refrescarCategoriasFuera, 300);
     return;
   }
   if (t.dataset.catColor !== undefined) {
@@ -2527,7 +2728,7 @@ document.addEventListener('change', async e => {
     let ultima = null;
     for (const a of archivos) {
       try {
-        const c = { id: uid(), libroId: l.id, imagen: await comprimirImagen(a, 2200, 0.85), pagina: l.paginaActual || 0, comentario: '', texto: '', categoria: -1, fecha: ahora() };
+        const c = citaNueva(l, await comprimirImagen(a, 2200, 0.85));
         E.citas.push(c);
         await BD.poner('citas', c);
         ultima = c;

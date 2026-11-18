@@ -256,6 +256,24 @@ label.etiqueta-campo { display: flex; flex-direction: column; gap: 4px; font-siz
 
 .avance-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .avance-control input[type="number"] { width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+.paso-num { display: inline-flex; align-items: stretch; gap: 0; border: 1px solid var(--linea); border-radius: 10px; background: var(--hoja); overflow: hidden; flex: none; }
+.paso-num input.campo { width: 70px !important; border: 0; border-radius: 0; text-align: center !important; font-variant-numeric: tabular-nums; -moz-appearance: textfield; padding-left: 4px; padding-right: 4px; }
+.paso-num input::-webkit-outer-spin-button, .paso-num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.paso-num .paso { width: 44px; min-height: 44px; border: 0; background: var(--hoja-2); color: var(--acento); display: grid; place-items: center; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.paso-num .paso:active { background: var(--acento-suave); }
+.paso-num .paso svg { width: 20px; height: 20px; }
+.fila-ubicacion { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+.fila-ubicacion [hidden] { display: none !important; }
+.fila-ubicacion .etiqueta-campo { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.fila-ubicacion .etiqueta-campo .nota-pequena { display: inline; margin: 0; font-size: inherit; }
+.fila-ubicacion label.etiqueta-campo { align-items: stretch; }
+.notas-pagina { display: flex; flex-direction: column; gap: 8px; }
+.nota-pagina { display: flex; gap: 12px; align-items: flex-start; text-align: left; width: 100%; padding: 10px 12px; border: 1px solid var(--linea); border-radius: 10px; background: var(--hoja); color: var(--tinta); font: inherit; }
+.nota-pagina .pag { flex: none; min-width: 52px; font-weight: 700; color: var(--acento); font-variant-numeric: tabular-nums; }
+.nota-pagina span:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+.form-nota-pagina { display: flex; flex-direction: column; gap: 8px; }
+.form-nota-pagina .fila { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lista-categorias .boton.icono { flex: none; width: 42px; min-height: 42px; padding: 0; display: grid; place-items: center; }
 input[type="range"] { width: 100%; accent-color: var(--acento); }
 .porcentaje { font-family: var(--f-titulo); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
@@ -381,7 +399,7 @@ label.resultado:has(input:checked) { background: var(--acento-suave); }
 .progreso-repaso { height: 5px; background: var(--hoja-2); border-radius: 3px; overflow: hidden; }
 .progreso-repaso span { display: block; height: 100%; background: var(--acento); transition: width .3s ease; }
 .tarjeta-flash {
-  display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; min-height: 260px; border: 1px solid var(--linea);
+  display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; min-height: 260px; flex-shrink: 0; border: 1px solid var(--linea);
   border-radius: 18px; background: var(--hoja); box-shadow: var(--sombra); padding: 0; overflow: hidden; text-align: center; color: var(--tinta);
 }
 .tarjeta-flash .cara, .tarjeta-flash .reverso { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 26px 20px; }
@@ -392,6 +410,11 @@ label.resultado:has(input:checked) { background: var(--acento-suave); }
 .frase-tarjeta { font-family: var(--f-titulo); font-style: italic; color: var(--tinta-2); font-size: 15px; max-width: 46ch; }
 .frase-tarjeta mark { background: color-mix(in srgb, var(--marcador) 60%, transparent); color: inherit; padding: 0 2px; border-radius: 2px; }
 .def-tarjeta { font-size: 14.5px; color: var(--tinta-2); max-width: 52ch; }
+.formas-verbo { font-weight: 600; font-size: 15.5px; color: var(--acento); margin: 2px 0 0; }
+.tabla-verbo { border-collapse: collapse; font-size: 14px; text-align: left; margin: 2px 0 0; max-width: 100%; }
+.tabla-verbo th { font-weight: 500; color: var(--tinta-2); padding: 3px 12px 3px 0; white-space: nowrap; vertical-align: top; font-size: 12.5px; }
+.tabla-verbo td { padding: 3px 0; color: var(--tinta); }
+.tarjeta-flash .tabla-verbo { margin: 6px auto 0; }
 .botones-nota { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
 .botones-nota .boton { flex-direction: column; gap: 0; min-height: 54px; white-space: normal; }
 .botones-nota small { font-size: 11.5px; font-weight: 400; color: var(--tinta-2); }
@@ -469,6 +492,8 @@ div.tarjeta-flash[role="button"] { cursor: pointer; }
   <symbol id="i-descargar" viewBox="0 0 24 24"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></symbol>
   <symbol id="i-subir" viewBox="0 0 24 24"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></symbol>
   <symbol id="i-atras" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+  <symbol id="i-arriba" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
+  <symbol id="i-abajo" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-externo" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></symbol>
   <symbol id="i-pegar" viewBox="0 0 24 24"><path d="M9 3h6v4H9z"/><path d="M9 5H6v16h12V5h-3"/></symbol>
   <symbol id="i-cajon" viewBox="0 0 24 24"><path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5 5h14l2 8v6H3v-6z"/></symbol>

@@ -129,3 +129,24 @@ PORTADAS AUTOMÁTICAS
   Si cambias el título o el autor en la ficha, vuelve a buscarla.
 - Si no es tu edición: en la ficha, «Cambiar portada» te enseña varias para elegir, o puedes usar una foto tuya.
 - Sin conexión, la busca cuando vuelva la cobertura.
+
+CATEGORÍAS DE LAS CITAS
+- Citas > «Editar» (o «Editar» dentro de una cita): cambia nombre y color, «Añadir categoría» para crear
+  las que quieras, y la papelera para quitar una. Las citas que la tenían se quedan sin categoría, no se borran.
+
+NOTAS POR PÁGINA
+- En la ficha del libro, «Notas por página»: elige la página y escribe la nota. Toca una nota para
+  cambiarla o borrarla. Salen ordenadas por página y van en la copia de seguridad y en la exportación.
+- Las flechas ▲▼ suben o bajan una página; si las mantienes pulsadas, pasan deprisa. Están también
+  en «Voy por la página» y en la página de cada cita. Puedes seguir escribiendo el número a mano.
+
+CITAS DE EBOOKS
+- En cada cita, «Dónde está»: elige «Página» o «% (ebook)» y apunta el número (admite decimales: 37,5).
+  El capítulo es opcional. La siguiente cita del mismo libro empieza ya en % y con el mismo capítulo.
+- Las citas del libro se ordenan por su posición aunque mezcles papel y ebook.
+
+VERBOS ALEMANES
+- Al buscar un verbo alemán (o una forma suya: «ging» lleva a «gehen») salen sus formas principales:
+  gehen · ging · ist gegangen, y una tabla con presente (ich, du, er), Präteritum, Perfekt, imperativo
+  y Konjunktiv II. Aparecen en la tarjeta al girarla y en la exportación a Anki/Quizlet.
+- Los verbos que ya tenías guardados se completan solos la próxima vez que abras la app con conexión.

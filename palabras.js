@@ -130,7 +130,8 @@ const Palabras = (() => {
    *  Si es una forma flexionada (p. ej. «Häuser»), devuelve la palabra base («Haus»). */
   async function gramaticaAleman(palabra) {
     const p = palabra.trim();
-    const formas = [...new Set([p.charAt(0).toUpperCase() + p.slice(1), p])];
+    // Primero tal cual (gehen = verbo) y luego con mayúscula (das Gehen = sustantivo)
+    const formas = [...new Set([p, p.charAt(0).toUpperCase() + p.slice(1)])];
     for (const forma of formas) {
       const r = await pedirJSON('https://de.wiktionary.org/w/api.php?action=parse&prop=wikitext&format=json&formatversion=2&origin=*&redirects=1&page=' + encodeURIComponent(forma));
       if (r.error) return { error: r.error };
@@ -148,11 +149,34 @@ const Palabras = (() => {
         if (/^[—–\-?]*$/.test(plural)) plural = '';
         return { forma, sustantivo: true, genero: g ? g[1] : '', plural };
       }
+      if (/\{\{Wortart\|Verb\|Deutsch\}\}/.test(seccion)) {
+        const verbo = verboDeSeccion(seccion);
+        if (verbo) return { forma, verbo };
+      }
       const base = seccion.match(/\{\{Grundformverweis[^|}]*\|([^|}]+)/);
       if (base) return { forma, base: base[1].trim() };
       return { forma, sustantivo: false };
     }
     return {};
+  }
+
+  /** Formas principales de un verbo alemán, sacadas de la tabla «Deutsch Verb Übersicht» de de.wiktionary. */
+  function verboDeSeccion(seccion) {
+    const t = seccion.match(/\{\{Deutsch Verb Übersicht([\s\S]*?)\n\}\}/);
+    if (!t) return null;
+    const campo = nombre => {
+      const m = t[1].match(new RegExp('\\|\\s*' + nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*=\\s*([^\\n|]*)'));
+      const x = m ? limpiarWiki(m[1]) : '';
+      return /^[—–\-?]*$/.test(x) ? '' : x;
+    };
+    const aux = [campo('Hilfsverb'), campo('Hilfsverb2')].filter(Boolean);
+    const v = {
+      ich: campo('Präsens_ich'), du: campo('Präsens_du'), er: campo('Präsens_er, sie, es'),
+      prat: campo('Präteritum_ich'), part: campo('Partizip II'),
+      aux: [...new Set(aux.map(a => (/sein/.test(a) ? 'sein' : /haben/.test(a) ? 'haben' : a)))].join('/'),
+      konj: campo('Konjunktiv II_ich'), imp: campo('Imperativ Singular'), impPl: campo('Imperativ Plural'),
+    };
+    return v.er || v.prat || v.part ? v : null;
   }
 
   async function buscar(palabra, idioma, opciones = {}) {
@@ -187,7 +211,7 @@ const Palabras = (() => {
     }
     return {
       palabra: forma, idioma, traducciones: trad.lista, definiciones: defs.defs, definicionesEnIngles, sinRed,
-      ...(idioma === 'de' ? { genero: gram.genero || '', plural: gram.plural || '', generoBuscado: !gram.error && !sinRed } : {}),
+      ...(idioma === 'de' ? { genero: gram.genero || '', plural: gram.plural || '', verbo: gram.verbo || null, generoBuscado: !gram.error && !sinRed, gram2: !gram.error && !sinRed } : {}),
     };
   }
 
@@ -196,7 +220,7 @@ const Palabras = (() => {
     return {
       id: uid(), libroId: libroId || '', palabra: r.palabra, idioma: r.idioma,
       traducciones: r.traducciones || [], definiciones: r.definiciones || [], definicionesEnIngles: !!r.definicionesEnIngles,
-      ...(r.idioma === 'de' ? { genero: r.genero || '', plural: r.plural || '', generoBuscado: !!r.generoBuscado } : {}),
+      ...(r.idioma === 'de' ? { genero: r.genero || '', plural: r.plural || '', generoBuscado: !!r.generoBuscado, gram2: !!r.gram2, ...(r.verbo ? { verbo: r.verbo } : {}) } : {}),
       frase: frase || '', pagina: pagina || 0, nota: '', caja: 0, proxima: ahora(), aciertos: 0, fallos: 0, fecha: ahora(),
       ...(r.sinRed ? { pendiente: true } : {}),
     };
@@ -251,7 +275,7 @@ const Palabras = (() => {
       if (r.sinRed) break;
       if (!p.traducciones?.length) p.traducciones = r.traducciones;
       if (!p.definiciones?.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
-      if (r.idioma === 'de') Object.assign(p, { palabra: r.palabra, genero: r.genero, plural: r.plural, generoBuscado: r.generoBuscado });
+      if (r.idioma === 'de') Object.assign(p, { palabra: r.palabra, genero: r.genero, plural: r.plural, generoBuscado: r.generoBuscado, gram2: r.gram2 }, r.verbo ? { verbo: r.verbo } : {});
       delete p.pendiente;
       await guardar(p);
       hechas++;
@@ -270,6 +294,32 @@ const Palabras = (() => {
   function lineaPlural(p) {
     if (p.idioma !== 'de' || !p.genero) return '';
     return p.plural ? `Plural: <span class="art art-f">die</span> ${esc(p.plural)}` : 'Sin plural';
+  }
+  /** «gehen · ging · ist gegangen» */
+  function formasVerbo(p) {
+    const v = p.verbo;
+    if (p.idioma !== 'de' || !v) return '';
+    const aux = { sein: 'ist', haben: 'hat', 'haben/sein': 'hat/ist', 'sein/haben': 'ist/hat' }[v.aux] || '';
+    return [p.palabra, v.prat, v.part ? (aux ? aux + ' ' : '') + v.part : ''].filter(Boolean).join(' · ');
+  }
+  /** Tabla corta con las conjugaciones principales. */
+  function tablaVerbo(p) {
+    const v = p.verbo;
+    if (p.idioma !== 'de' || !v) return '';
+    const aux = { sein: 'ist', haben: 'hat', 'haben/sein': 'hat/ist', 'sein/haben': 'ist/hat' }[v.aux] || '';
+    const filas = [
+      ['Presente', [v.ich && 'ich ' + v.ich, v.du && 'du ' + v.du, v.er && 'er ' + v.er].filter(Boolean).join(', ')],
+      ['Präteritum', v.prat ? 'er ' + v.prat : ''],
+      ['Perfekt', v.part ? 'er ' + (aux ? aux + ' ' : '') + v.part : ''],
+      ['Imperativo', [v.imp, v.impPl].filter(Boolean).map(x => x + '!').join(' / ')],
+      ['Konjunktiv II', v.konj ? 'ich ' + v.konj : ''],
+    ].filter(f => f[1]);
+    return `<table class="tabla-verbo">${filas.map(([k, x]) => `<tr><th>${k}</th><td>${esc(x)}</td></tr>`).join('')}</table>`;
+  }
+  function textoVerbo(p) {
+    const v = p.verbo;
+    if (p.idioma !== 'de' || !v) return '';
+    return [formasVerbo(p), [v.ich && 'ich ' + v.ich, v.du && 'du ' + v.du, v.er && 'er ' + v.er].filter(Boolean).join(', ')].filter(Boolean).join(' — ');
   }
   const insignia = idioma => `<span class="insignia-idioma" title="${esc(IDIOMAS[idioma]?.nombre || '')}">${esc(IDIOMAS[idioma]?.corto || idioma)}</span>`;
   const botonHablar = (texto, idioma) => puedeHablar()
@@ -397,6 +447,7 @@ const Palabras = (() => {
         <div class="cab-resultado"><b class="palabra-grande">${articulo(r)}${esc(r.palabra)}</b>${insignia(r.idioma)}${botonHablar(articuloTexto(r) + r.palabra, r.idioma)}</div>
         ${lineaPlural(r) ? `<p class="ayuda" style="margin:0">${lineaPlural(r)}</p>` : ''}
         ${r.traducciones.length ? `<p class="traduccion">${esc(r.traducciones.join(', '))}</p>` : ''}
+        ${r.verbo ? `<p class="formas-verbo">${esc(formasVerbo(r))}</p>${tablaVerbo(r)}` : ''}
         ${r.definiciones.length ? `<ol class="definiciones">${r.definiciones.slice(0, 4).map(d => `<li>${d.tipo ? `<i>${esc(d.tipo)}</i> ` : ''}${esc(d.texto)}${d.ejemplo ? `<small>${esc(d.ejemplo)}</small>` : ''}</li>`).join('')}</ol>` : ''}
         ${r.definicionesEnIngles ? '<p class="nota-pequena">Definiciones en inglés (no la he encontrado en el diccionario en español).</p>' : (r.idioma !== 'es' && r.definiciones.length ? '<p class="nota-pequena">Definiciones en inglés, de Wiktionary.</p>' : '')}
       </div>`;
@@ -427,6 +478,7 @@ const Palabras = (() => {
       cuerpo: `
         <div class="cab-resultado"><b class="palabra-grande">${articulo(p)}${esc(p.palabra)}</b>${insignia(p.idioma)}${botonHablar(articuloTexto(p) + p.palabra, p.idioma)}</div>
         ${lineaPlural(p) ? `<p class="ayuda" style="margin:0">${lineaPlural(p)}</p>` : ''}
+        ${p.verbo ? `<p class="formas-verbo">${esc(formasVerbo(p))}</p>${tablaVerbo(p)}` : ''}
         ${p.pendiente ? `<div class="consejo">${icono('nube')}<p>Guardada sin conexión: buscaré su significado cuando vuelva la cobertura.</p></div>` : ''}
         <label class="etiqueta-campo">${p.idioma === 'es' ? 'Significado (lo que verás al girar la tarjeta)' : 'Traducción (separa varias con comas)'}
           <input class="campo" id="p-traduccion" value="${esc((p.traducciones || []).join(', '))}" placeholder="${p.idioma === 'es' ? 'Opcional: tus propias palabras' : 'Escribe la traducción'}"></label>
@@ -614,7 +666,9 @@ const Palabras = (() => {
       ${p.definiciones?.length && p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[0].texto)}</span>` : ''}
       ${p.definiciones?.length > 1 && !p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[1].texto)}</span>` : ''}`;
     const palabraHTML = (p, conArticulo) => `<b class="palabra-tarjeta">${conArticulo ? articulo(p) : ''}${esc(p.palabra)}</b>
-      ${conArticulo && lineaPlural(p) ? `<span class="nota-pequena">${lineaPlural(p)}</span>` : ''}`;
+      ${conArticulo && lineaPlural(p) ? `<span class="nota-pequena">${lineaPlural(p)}</span>` : ''}
+`;
+    const bloqueVerbo = p => (p.idioma === 'de' && p.verbo ? `<span class="formas-verbo">${esc(formasVerbo(p))}</span>${tablaVerbo(p)}` : '');
     const pie = p => {
       const l = libroPorId(p.libroId);
       return `<span class="nota-pequena">${esc(l ? tituloVisible(l) : '')}${p.pagina ? ' · p. ' + p.pagina : ''}</span>`;
@@ -634,10 +688,10 @@ const Palabras = (() => {
       let reverso = '';
       if (o.modo === 'ver') {
         cara = `${insignia(p.idioma)}${palabraHTML(p, false)}${p.frase ? `<span class="frase-tarjeta">${fraseMarcada(p.frase, p.palabra)}</span>` : ''}`;
-        reverso = `${p.idioma === 'de' && p.genero ? palabraHTML(p, true) : ''}${significadoHTML(p)}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
+        reverso = `${p.idioma === 'de' && p.genero ? palabraHTML(p, true) : ''}${significadoHTML(p)}${bloqueVerbo(p)}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
       } else if (o.modo === 'reves' || o.modo === 'escribir') {
         cara = `${insignia(p.idioma)}${significadoHTML(p)}${p.frase ? `<span class="frase-tarjeta">${fraseOculta(p.frase, p.palabra)}</span>` : ''}`;
-        reverso = `${palabraHTML(p, true)}${resultado && o.modo === 'escribir' ? `<span class="veredicto ${resultado}">${resultado === 'bien' ? '¡Correcto!' : resultado === 'casi' ? `Casi: escribiste «${esc(escrito)}»` : `Escribiste «${esc(escrito || '—')}»`}</span>` : ''}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
+        reverso = `${palabraHTML(p, true)}${bloqueVerbo(p)}${resultado && o.modo === 'escribir' ? `<span class="veredicto ${resultado}">${resultado === 'bien' ? '¡Correcto!' : resultado === 'casi' ? `Casi: escribiste «${esc(escrito)}»` : `Escribiste «${esc(escrito || '—')}»`}</span>` : ''}${p.nota ? `<span class="def-tarjeta"><i>${esc(p.nota)}</i></span>` : ''}${pie(p)}`;
       } else {
         cara = `${insignia(p.idioma)}<b class="palabra-tarjeta">${esc(p.palabra)}</b><span class="def-tarjeta">${esc(resumenSignificado(p))}</span>`;
         reverso = `${palabraHTML(p, true)}<span class="veredicto ${resultado}">${resultado === 'bien' ? '¡Correcto!' : 'Era ' + ARTICULOS[p.genero]}</span>`;
@@ -773,6 +827,7 @@ const Palabras = (() => {
   function textoReverso(p, html) {
     const partes = [(p.traducciones || []).join(', ') || p.definiciones?.[0]?.texto || ''];
     if (p.idioma === 'de' && p.genero) partes.push(p.plural ? 'Plural: die ' + p.plural : 'Sin plural');
+    if (p.verbo) partes.push(textoVerbo(p));
     if (p.traducciones?.length && p.definiciones?.[0]) partes.push(p.definiciones[0].texto);
     if (p.frase) partes.push(html ? `<i>${esc(p.frase)}</i>` : p.frase);
     return partes.filter(Boolean).join(html ? '<br>' : ' — ');
@@ -898,7 +953,10 @@ const Palabras = (() => {
       if (r.sinRed) { avisar('Sin conexión'); b.disabled = false; b.textContent = 'Buscar otra vez'; return; }
       if (r.traducciones.length) p.traducciones = r.traducciones;
       if (r.definiciones.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
-      if (r.idioma === 'de' && r.generoBuscado) Object.assign(p, { genero: r.genero, plural: r.plural, generoBuscado: true });
+      if (r.idioma === 'de' && r.generoBuscado) {
+        Object.assign(p, { genero: r.genero, plural: r.plural, generoBuscado: true, gram2: true });
+        if (r.verbo) p.verbo = r.verbo; else delete p.verbo;
+      }
       await guardar(p);
       ventanaPalabra(p.id);
     },
@@ -914,7 +972,7 @@ const Palabras = (() => {
   let completandoGeneros = false;
   async function completarGeneros() {
     if (completandoGeneros || sinConexion()) return;
-    const lista = E.palabras.filter(p => p.idioma === 'de' && !p.generoBuscado && !p.pendiente).slice(0, 25);
+    const lista = E.palabras.filter(p => p.idioma === 'de' && !p.gram2 && !p.pendiente).slice(0, 25);
     if (!lista.length) return;
     completandoGeneros = true;
     let cambios = 0;
@@ -922,7 +980,11 @@ const Palabras = (() => {
       const g = await gramaticaAleman(p.palabra);
       if (g.error) break;
       if (g.sustantivo) { p.genero = g.genero; p.plural = g.plural; if (g.forma) p.palabra = g.forma; cambios++; }
+      let v = g.verbo;
+      if (!v && g.base) { const gb = await gramaticaAleman(g.base); v = gb.verbo; } // «ging» -> gehen
+      if (v) { p.verbo = v; cambios++; }
       p.generoBuscado = true;
+      p.gram2 = true;
       await guardar(p);
     }
     completandoGeneros = false;
