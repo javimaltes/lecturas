@@ -191,9 +191,9 @@ function dondeCita(c, { capitulo = true, corto = false } = {}) {
 /** Una cita nueva empieza como la última del libro: con página o con porcentaje (ebook). */
 function citaNueva(l, imagen = '') {
   const ultima = E.citas.filter(x => x.libroId === l.id).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))[0];
-  const ebook = ultima?.ubicacion === 'porcentaje';
+  const ebook = ultima ? ultima.ubicacion === 'porcentaje' : l.avanceEn === 'porcentaje';
   const c = { id: uid(), libroId: l.id, imagen, pagina: ebook ? 0 : (l.paginaActual || 0), comentario: '', texto: '', categoria: -1, fecha: ahora() };
-  if (ebook) { c.ubicacion = 'porcentaje'; c.porcentaje = 0; }
+  if (ebook) { c.ubicacion = 'porcentaje'; c.porcentaje = l.avanceEn === 'porcentaje' ? (l.porcentajeActual || 0) : 0; }
   if (ultima?.capitulo) c.capitulo = ultima.capitulo;
   return c;
 }
@@ -217,12 +217,20 @@ async function borrarLibro(l) {
   E.citas = E.citas.filter(c => c.libroId !== l.id);
   await BD.borrar('libros', l.id);
 }
+/** Porcentaje leído: el que has puesto tú (ebooks) o el que sale de las páginas. null si no se sabe. */
+function porcentajeLibro(l) {
+  if (l.avanceEn === 'porcentaje') return Math.min(100, Math.max(0, l.porcentajeActual || 0));
+  return l.paginas > 0 ? Math.min(100, Math.round((l.paginaActual || 0) / l.paginas * 100)) : null;
+}
+const textoPct = n => String(Math.round(n * 10) / 10).replace('.', ',') + ' %';
+
 function cambiarEstado(l, nuevo) {
   l.estado = nuevo;
   if (nuevo === 'Leyendo' && !l.fechaInicio) l.fechaInicio = ahora();
   if (nuevo === 'Leído') {
     if (!l.fechaFin) l.fechaFin = ahora();
     if (l.paginas > 0) l.paginaActual = l.paginas;
+    if (l.avanceEn === 'porcentaje') l.porcentajeActual = 100;
   }
 }
 function libroExiste(d) {
@@ -335,8 +343,9 @@ const Buscador = {
   },
   async fuenteGoogle(isbns) {
     const buscados = new Set(isbns);
-    const [a, b] = await Promise.all([this.google(isbns[0]), this.google('isbn:' + isbns[0])]);
-    const v = [...a.vols, ...b.vols].find(x => (x.industryIdentifiers || []).some(i => buscados.has(this.limpiar(i.identifier)))) || b.vols[0];
+    // También con el ISBN-10: algunos libros antiguos solo están registrados así
+    const [a, b, c] = await Promise.all([this.google(isbns[0]), this.google('isbn:' + isbns[0]), isbns[1] ? this.google('isbn:' + isbns[1]) : { vols: [] }]);
+    const v = [...a.vols, ...b.vols, ...c.vols].find(x => (x.industryIdentifiers || []).some(i => buscados.has(this.limpiar(i.identifier)))) || b.vols[0];
     if (v) {
       const d = this.deGoogle(v, isbns[0]);
       return d.titulo ? { d, estado: 'encontrado' } : { estado: 'lo tiene, pero sin título' };
@@ -721,7 +730,8 @@ function crearCopia() {
       paginas: l.paginas || 0, descripcion: l.descripcion, portada: base64De(l.portada),
       portadaURL: l.portada && !l.portada.startsWith('data:') ? l.portada : undefined,
       estado: l.estado, procedencia: l.procedencia, lugar: l.lugar, fechaDevolucion: l.fechaDevolucion || undefined,
-      paginaActual: l.paginaActual || 0, notas: l.notas, fechaInicio: l.fechaInicio || undefined,
+      paginaActual: l.paginaActual || 0, avanceEn: l.avanceEn || undefined, porcentajeActual: l.porcentajeActual || undefined,
+      notas: l.notas, fechaInicio: l.fechaInicio || undefined,
       fechaFin: l.fechaFin || undefined, fechaAlta: l.fechaAlta, etiquetas: l.etiquetas || [],
       notasPagina: (l.notasPagina || []).length ? l.notasPagina : undefined,
       subrayados: citasDe(l.id).map(c => ({
@@ -755,7 +765,8 @@ async function restaurarCopia(json) {
     }, e.estado && e.estado !== 'Por revisar' ? e.estado : 'Cajón de sastre');
     Object.assign(l, {
       procedencia: e.procedencia || 'Mío', lugar: e.lugar || '', fechaDevolucion: e.fechaDevolucion || null,
-      paginaActual: e.paginaActual || 0, notas: e.notas || '', fechaInicio: e.fechaInicio || null, fechaFin: e.fechaFin || null,
+      paginaActual: e.paginaActual || 0, notas: e.notas || '',
+      ...(e.avanceEn === 'porcentaje' ? { avanceEn: 'porcentaje' } : {}), porcentajeActual: e.porcentajeActual || 0, fechaInicio: e.fechaInicio || null, fechaFin: e.fechaFin || null,
       fechaAlta: e.fechaAlta || ahora(), etiquetas: e.etiquetas || [],
       notasPagina: Array.isArray(e.notasPagina) ? e.notasPagina : [],
     });
@@ -796,7 +807,7 @@ function csvLibros() {
   return csv([
     ['Título', 'Autor', 'ISBN', 'Editorial', 'Publicación', 'Páginas', 'Estado', 'De quién es', 'Biblioteca o persona', 'Devolver antes de', 'Página actual', 'Empezado', 'Terminado', 'Etiquetas', 'Notas', 'Citas'],
     ...E.libros.map(l => [l.titulo, l.autores, l.isbn, l.editorial, l.fechaPublicacion, l.paginas || '', l.estado, l.procedencia, l.lugar,
-      fechaCorta(l.fechaDevolucion), l.paginaActual || '', fechaCorta(l.fechaInicio), fechaCorta(l.fechaFin),
+      fechaCorta(l.fechaDevolucion), l.avanceEn === 'porcentaje' ? (l.porcentajeActual ? textoPct(l.porcentajeActual) : '') : (l.paginaActual || ''), fechaCorta(l.fechaInicio), fechaCorta(l.fechaFin),
       (l.etiquetas || []).join(', '), l.notas, citasDe(l.id).length]),
   ]);
 }
@@ -812,7 +823,8 @@ function htmlLegible() {
   const bloques = E.libros.map(l => {
     const datos = [l.estado, l.procedencia + (l.lugar ? ` (${l.lugar})` : '')];
     if (l.paginas) datos.push(l.paginas + ' págs.');
-    if (l.paginaActual) datos.push(`Voy por la ${l.paginaActual}` + (l.paginas ? ` de ${l.paginas}` : ''));
+    if (l.avanceEn === 'porcentaje' && l.porcentajeActual) datos.push(`Voy por el ${textoPct(l.porcentajeActual)}`);
+    else if (l.paginaActual) datos.push(`Voy por la ${l.paginaActual}` + (l.paginas ? ` de ${l.paginas}` : ''));
     if (l.fechaInicio) datos.push('Empezado: ' + fechaCorta(l.fechaInicio));
     if (l.fechaFin) datos.push('Terminado: ' + fechaCorta(l.fechaFin));
     const citas = citasDe(l.id).map(c => {
@@ -1113,9 +1125,9 @@ function filaLibro(l) {
   if (l.notas) meta.push(`<span title="Tiene notas">${icono('nota')}</span>`);
   if (n) meta.push(`<span title="Citas">${icono('marcador')} ${n}</span>`);
   let extra = '';
-  if (l.estado === 'Leyendo' && l.paginas > 0) {
-    const p = Math.min(100, Math.round((l.paginaActual || 0) / l.paginas * 100));
-    extra += `<span class="avance"><span class="avance-barra"><i style="width:${p}%"></i></span><small>${p} %</small></span>`;
+  const pctLista = porcentajeLibro(l);
+  if (l.estado === 'Leyendo' && pctLista != null) {
+    extra += `<span class="avance"><span class="avance-barra"><i style="width:${pctLista}%"></i></span><small>${textoPct(pctLista)}</small></span>`;
   }
   if ((l.etiquetas || []).length) extra += `<span class="fila-etiquetas">${l.etiquetas.map(t => '#' + esc(t)).join(' ')}</span>`;
   if (l.procedencia !== 'Mío' && l.fechaDevolucion && !['Leído', 'Abandonado'].includes(l.estado)) {
@@ -1144,9 +1156,10 @@ function pintarFicha() {
   panel.classList.remove('sin-libro');
   const sugerencias = todasLasEtiquetas().filter(e => !(l.etiquetas || []).some(x => x.toLowerCase() === e.nombre.toLowerCase())).slice(0, 24);
   const citas = citasDe(l.id);
-  const pct = l.paginas > 0 ? Math.min(100, Math.round((l.paginaActual || 0) / l.paginas * 100)) : null;
+  const pct = porcentajeLibro(l);
+  const enPct = l.avanceEn === 'porcentaje';
   const goodreads = l.isbn ? `https://www.goodreads.com/book/isbn/${encodeURIComponent(l.isbn)}` : `https://www.goodreads.com/search?q=${encodeURIComponent((l.titulo + ' ' + l.autores).trim())}`;
-  const mostrarAvance = l.estado === 'Leyendo' || l.paginaActual > 0;
+  const mostrarAvance = l.estado === 'Leyendo' || l.paginaActual > 0 || l.porcentajeActual > 0;
 
   panel.innerHTML = `
   <div class="ficha-barra">
@@ -1188,12 +1201,23 @@ function pintarFicha() {
 
     ${mostrarAvance ? `<section class="seccion">
       <h2>Mi avance</h2>
-      <div class="avance-control">
+      <div class="segmentos" style="max-width:300px;margin-bottom:12px">
+        <button type="button" data-accion="avance-en" data-modo="paginas" aria-pressed="${!enPct}">Página</button>
+        <button type="button" data-accion="avance-en" data-modo="porcentaje" aria-pressed="${enPct}">Porcentaje</button>
+      </div>
+      ${enPct ? `<div class="avance-control">
+        <span>Voy por el</span>
+        ${campoPagina({ attrs: 'data-campo="porcentajeActual" data-tipo="decimal" max="100"', valor: l.porcentajeActual || 0, etiqueta: 'Porcentaje', decimal: true })}
+        <span class="ayuda" style="font-size:15px">%</span>
+        ${l.paginas ? `<span class="espacio"></span><span class="ayuda" id="pagina-aprox">≈ pág. ${Math.round((l.porcentajeActual || 0) / 100 * l.paginas)} de ${l.paginas}</span>` : ''}
+      </div>
+      <input type="range" min="0" max="100" step="1" value="${Math.round(l.porcentajeActual || 0)}" data-campo="porcentajeActual" data-tipo="decimal" aria-label="Porcentaje leído">
+      <p class="ayuda">Para ebooks o cuando no sabes las páginas: Kindle, Kobo y Libros lo enseñan abajo en la pantalla.</p>` : `<div class="avance-control">
         <span>Voy por la página</span>
         ${campoPagina({ attrs: `data-campo="paginaActual" data-tipo="numero"${l.paginas ? ` max="${l.paginas}"` : ''}`, valor: l.paginaActual || 0 })}
         ${l.paginas ? `<span class="ayuda" style="font-size:15px">de ${l.paginas}</span><span class="espacio"></span><span class="porcentaje" id="porcentaje">${pct} %</span>` : ''}
       </div>
-      ${l.paginas ? `<input type="range" min="0" max="${l.paginas}" step="1" value="${Math.min(l.paginaActual || 0, l.paginas)}" data-campo="paginaActual" data-tipo="numero" aria-label="Página actual">` : `<p class="ayuda">Pon el número de páginas en «Datos del libro» para ver el porcentaje.</p>`}
+      ${l.paginas ? `<input type="range" min="0" max="${l.paginas}" step="1" value="${Math.min(l.paginaActual || 0, l.paginas)}" data-campo="paginaActual" data-tipo="numero" aria-label="Página actual">` : `<p class="ayuda">Pon el número de páginas en «Datos del libro» para ver el porcentaje, o elige «Porcentaje» si solo lo sabes así.</p>`}`}
       ${l.fechaProgreso ? `<p class="ayuda" id="actualizado">Actualizado ${hace(l.fechaProgreso)}</p>` : ''}
     </section>` : ''}
 
@@ -1645,13 +1669,16 @@ async function buscarYAnadirIsbn(isbn) {
     avisar(`Añadido: ${l.titulo}`);
     return;
   }
-  estadoEscaner(`No he encontrado datos para el ISBN <b>${esc(isbn)}</b>.`);
-  destino.innerHTML = `<p class="informe">${esc('Respuestas:\n' + r.informe.join('\n'))}</p>
+  estadoEscaner(`El ISBN <b>${esc(isbn)}</b> no está en las bases de datos que consulto.`);
+  destino.innerHTML = `<p class="ayuda">Pasa con libros de editoriales pequeñas, ediciones muy nuevas o antiguas. Escribe el título (y si quieres el autor): lo busco así y se guarda con este ISBN.</p>
+    <form class="fila-campo" data-form="titulo-isbn"><input class="campo" id="titulo-isbn" placeholder="Título del libro" autocomplete="off" enterkeyhint="search"><button class="boton principal" type="submit">Buscar</button></form>
+    <div id="resultados" data-isbn="${esc(isbn)}"></div>
     <div class="fila-campo" style="flex-wrap:wrap">
-      <button type="button" class="boton principal" data-accion="crear-con-isbn" data-isbn="${esc(isbn)}">Crear la ficha a mano</button>
-      <button type="button" class="boton" data-accion="pestana-anadir" data-pestana="buscar">Buscar por título</button>
+      <button type="button" class="boton" data-accion="crear-con-isbn" data-isbn="${esc(isbn)}">Crear la ficha a mano</button>
       <button type="button" class="boton" data-accion="seguir-escaneando">Escanear otro</button>
-    </div>`;
+    </div>
+    <details class="nota-pequena"><summary>Detalles</summary><p class="informe">${esc(r.informe.join('\n'))}</p></details>`;
+  setTimeout(() => $('#titulo-isbn')?.focus(), 50);
 }
 
 let ultimosResultados = [];
@@ -1666,21 +1693,28 @@ async function buscarPorTitulo(q) {
       <button type="button" class="boton principal" data-accion="guardar-titulo-pendiente" data-texto="${esc(q.trim())}">Guardar para completar luego</button>`;
     return;
   }
+  const conIsbn = cont.dataset.isbn
+    ? `<button type="button" class="boton" data-accion="crear-titulo-isbn" data-titulo="${esc(q.trim())}" style="align-self:flex-start;margin-top:8px">Ninguno: crearlo como «${esc(q.trim())}»</button>` : '';
   if (!ultimosResultados.length) {
-    cont.innerHTML = `<p class="ayuda">No he encontrado nada. Prueba con menos palabras o solo con el apellido del autor.</p>`;
+    cont.innerHTML = `<p class="ayuda">No he encontrado nada. Prueba con menos palabras o solo con el apellido del autor.</p>${conIsbn}`;
     return;
   }
-  cont.innerHTML = `<div class="resultados">${ultimosResultados.map((d, i) => `<button type="button" class="resultado" data-accion="elegir-resultado" data-i="${i}">
-    ${portadaHTML(d, 'media')}<span style="min-width:0"><b>${esc(d.titulo)}</b><small>${esc(d.autores)}</small><small>${esc([d.editorial, String(d.fechaPublicacion || '').slice(0, 4)].filter(Boolean).join(' · '))}</small></span></button>`).join('')}</div>`;
+  cont.innerHTML = (cont.dataset.isbn ? '<p class="ayuda">Toca el tuyo (se guarda con el ISBN que has escaneado):</p>' : '') + `<div class="resultados">${ultimosResultados.map((d, i) => `<button type="button" class="resultado" data-accion="elegir-resultado" data-i="${i}">
+    ${portadaHTML(d, 'media')}<span style="min-width:0"><b>${esc(d.titulo)}</b><small>${esc(d.autores)}</small><small>${esc([d.editorial, String(d.fechaPublicacion || '').slice(0, 4)].filter(Boolean).join(' · '))}</small></span></button>`).join('')}</div>${conIsbn}`;
 }
 
 async function elegirResultado(i) {
   const d0 = ultimosResultados[i];
   if (!d0) return;
+  const isbnEscaneado = $('#resultados')?.dataset.isbn;
   const ya = libroExiste(d0);
-  if (ya) { avisar('Ya lo tenías'); E.sel = ya.id; cerrarVentana(); return; }
+  if (ya) {
+    if (isbnEscaneado && !ya.isbn) { ya.isbn = isbnEscaneado; await guardarLibro(ya, true); }
+    avisar('Ya lo tenías'); E.sel = ya.id; cerrarVentana(); return;
+  }
   $('#resultados').innerHTML = `<p class="ayuda"><span class="cargando"></span> Preparando la ficha…</p>`;
   const d = await Buscador.completar(d0);
+  if (isbnEscaneado) d.isbn = isbnEscaneado; // tu edición es la del código que has escaneado
   const l = nuevoLibro(d, 'Cajón de sastre');
   await anadirLibro(l);
   E.sel = l.id;
@@ -2429,6 +2463,23 @@ const acciones = {
   'cerrar-consejo': () => { ajuste.guardar('consejoVisto', '1'); pintarColumna(); },
   'completar-ahora': () => completarPendientes(true),
   'buscar-portada': b => ventanaPortadas(b.dataset.id),
+  'avance-en': b => {
+    const l = libroPorId(E.sel);
+    if (!l) return;
+    const modo = b.dataset.modo;
+    if ((l.avanceEn || 'paginas') === modo) return;
+    // Al cambiar, se traslada lo que ya tenías si se puede calcular
+    if (modo === 'porcentaje') {
+      l.avanceEn = 'porcentaje';
+      if (!l.porcentajeActual && l.paginas > 0 && l.paginaActual) l.porcentajeActual = Math.round(l.paginaActual / l.paginas * 1000) / 10;
+    } else {
+      delete l.avanceEn;
+      if (l.paginas > 0 && l.porcentajeActual) l.paginaActual = Math.round(l.porcentajeActual / 100 * l.paginas);
+    }
+    guardarLibro(l, true);
+    pintarFicha();
+    pintarListaLibros();
+  },
   'elegir-portada': b => {
     const d = portadasOfrecidas[+b.dataset.i];
     const l = libroPorId(E.sel);
@@ -2469,6 +2520,15 @@ const acciones = {
 
   'pestana-anadir': b => { pestanaAnadir = b.dataset.pestana; if (!$('#contenido-anadir')) ventanaAnadir(); else pintarPestanaAnadir(); },
   'seguir-escaneando': () => { buscandoCodigo = false; pintarPestanaAnadir(); },
+  'crear-titulo-isbn': async b => {
+    const l = nuevoLibro({ titulo: b.dataset.titulo, isbn: $('#resultados')?.dataset.isbn || '' }, 'Cajón de sastre');
+    await anadirLibro(l);
+    E.sel = l.id;
+    E.vista = 'libros';
+    cerrarVentana();
+    avisar(`Añadido: ${l.titulo}`);
+    portadaAutomatica(l);
+  },
   'crear-con-isbn': async b => {
     const l = nuevoLibro({ isbn: b.dataset.isbn }, 'Cajón de sastre');
     await anadirLibro(l);
@@ -2630,6 +2690,7 @@ document.addEventListener('submit', async e => {
     buscarYAnadirIsbn(isbn);
   }
   if (tipo === 'titulo') buscarPorTitulo($('#consulta').value);
+  if (tipo === 'titulo-isbn') buscarPorTitulo($('#titulo-isbn').value);
   if (tipo === 'nota-pagina') anadirNotaPagina();
   if (tipo === 'portadas') pintarPortadas($('#consulta-portada').value.trim(), '');
   if (tipo === 'tuit-titulo' && estadoTuits) {
@@ -2676,8 +2737,17 @@ document.addEventListener('input', e => {
   if (!l) return;
   let v = t.value;
   if (t.dataset.tipo === 'numero') v = Math.max(0, parseInt(v, 10) || 0);
+  if (t.dataset.tipo === 'decimal') { v = parseFloat(String(v).replace(',', '.')); v = isFinite(v) ? Math.min(100, Math.max(0, Math.round(v * 10) / 10)) : 0; }
   if (t.dataset.tipo === 'fecha') v = deFechaInput(v);
   l[campo] = v;
+  if (campo === 'porcentajeActual') {
+    l.fechaProgreso = ahora();
+    $$('[data-campo="porcentajeActual"]').forEach(x => { if (x !== t) x.value = x.type === 'range' ? Math.round(v) : String(v).replace('.', ','); });
+    const ap = $('#pagina-aprox');
+    if (ap && l.paginas) ap.textContent = `≈ pág. ${Math.round(v / 100 * l.paginas)} de ${l.paginas}`;
+    const a = $('#actualizado');
+    if (a) a.textContent = 'Actualizado ahora';
+  }
   if (campo === 'paginaActual') {
     l.fechaProgreso = ahora();
     $$('[data-campo="paginaActual"]').forEach(x => { if (x !== t) x.value = v; });

@@ -150,3 +150,19 @@ VERBOS ALEMANES
   gehen · ging · ist gegangen, y una tabla con presente (ich, du, er), Präteritum, Perfekt, imperativo
   y Konjunktiv II. Aparecen en la tarjeta al girarla y en la exportación a Anki/Quizlet.
 - Los verbos que ya tenías guardados se completan solos la próxima vez que abras la app con conexión.
+
+AVANCE EN PORCENTAJE
+- En «Mi avance», elige «Porcentaje» y pon el % que te marca el ebook (admite decimales: 42,5).
+  No hace falta saber cuántas páginas tiene. Si lo sabes, verás también la página aproximada.
+- Las citas nuevas de ese libro empiezan en % y con el porcentaje por el que vas.
+
+DEFINICIONES PROPIAS
+- Si una palabra no aparece en el diccionario, al buscarla puedes escribir tú la traducción, una
+  definición y, en alemán, el género (der/die/das) y el plural.
+- En cualquier tarjeta guardada (toca la palabra): «Mi definición» sustituye a la del diccionario en la
+  tarjeta y en las exportaciones. Si la borras, vuelve la del diccionario.
+
+ISBN QUE NO SE ENCUENTRAN
+- Si un ISBN no está en las bases de datos, escribe el título en el cuadro que aparece: eliges tu libro
+  de la lista y se guarda con el ISBN escaneado. Si no sale, «Ninguno: crearlo como…» lo crea con ese
+  título y busca la portada sola.

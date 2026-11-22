@@ -221,6 +221,7 @@ const Palabras = (() => {
       id: uid(), libroId: libroId || '', palabra: r.palabra, idioma: r.idioma,
       traducciones: r.traducciones || [], definiciones: r.definiciones || [], definicionesEnIngles: !!r.definicionesEnIngles,
       ...(r.idioma === 'de' ? { genero: r.genero || '', plural: r.plural || '', generoBuscado: !!r.generoBuscado, gram2: !!r.gram2, ...(r.verbo ? { verbo: r.verbo } : {}) } : {}),
+      ...(r.miDefinicion ? { miDefinicion: r.miDefinicion } : {}),
       frase: frase || '', pagina: pagina || 0, nota: '', caja: 0, proxima: ahora(), aciertos: 0, fallos: 0, fecha: ahora(),
       ...(r.sinRed ? { pendiente: true } : {}),
     };
@@ -324,9 +325,20 @@ const Palabras = (() => {
   const insignia = idioma => `<span class="insignia-idioma" title="${esc(IDIOMAS[idioma]?.nombre || '')}">${esc(IDIOMAS[idioma]?.corto || idioma)}</span>`;
   const botonHablar = (texto, idioma) => puedeHablar()
     ? `<button type="button" class="boton icono-solo plano" data-accion="hablar" data-texto="${esc(texto)}" data-idioma="${idioma}" aria-label="Escuchar">${icono('altavoz')}</button>` : '';
+  /** La definición que se enseña: la tuya si la has escrito; si no, la primera del diccionario. */
+  const defPrincipal = p => (p.miDefinicion || '').trim() || p.definiciones?.[0]?.texto || '';
   function resumenSignificado(p) {
     if (p.traducciones?.length) return p.traducciones.slice(0, 3).join(', ');
-    return p.definiciones?.[0]?.texto || (p.pendiente ? 'Se completará al volver la conexión' : 'Sin traducción');
+    return defPrincipal(p) || (p.pendiente ? 'Se completará al volver la conexión' : 'Sin traducción');
+  }
+  /** Campos para escribir tú el género y el plural de un sustantivo alemán. */
+  function camposGenero(prefijo, genero = '', plural = '') {
+    return `<div class="dos">
+      <label class="etiqueta-campo">Género (si es sustantivo)<select class="campo" id="${prefijo}-genero">
+        ${[['', '—'], ['m', 'der (masculino)'], ['f', 'die (femenino)'], ['n', 'das (neutro)']].map(([v, t]) => `<option value="${v}" ${v === genero ? 'selected' : ''}>${t}</option>`).join('')}
+      </select></label>
+      <label class="etiqueta-campo">Plural<input class="campo" id="${prefijo}-plural" value="${esc(plural)}" placeholder="Häuser" autocapitalize="off" spellcheck="false"></label>
+    </div>`;
   }
   function fraseMarcada(frase, palabra) {
     if (!frase) return '';
@@ -459,7 +471,11 @@ const Palabras = (() => {
         <label class="etiqueta-campo">Frase del libro donde aparece (opcional)
           <textarea class="campo" id="frase-palabra" rows="2" placeholder="Te ayudará a recordarla en contexto"></textarea></label>
         <div class="fila-campo" style="align-items:flex-end;flex-wrap:wrap">
-          ${nada && !r.sinRed ? `<label class="etiqueta-campo" style="flex:1;min-width:160px">Traducción<input class="campo" id="traduccion-manual" placeholder="Escríbela tú"></label>` : ''}
+          ${nada && !r.sinRed ? `<div style="flex:1 1 100%;display:flex;flex-direction:column;gap:10px">
+            <label class="etiqueta-campo">${r.idioma === 'es' ? 'Significado' : 'Traducción'}<input class="campo" id="traduccion-manual" placeholder="Escríbela tú"></label>
+            <label class="etiqueta-campo"><span>Definición <span class="nota-pequena">(opcional)</span></span><textarea class="campo" id="definicion-manual" rows="2" placeholder="Con tus palabras, o la que hayas encontrado en otro diccionario"></textarea></label>
+            ${r.idioma === 'de' ? camposGenero('manual', r.genero || '', r.plural || '') : ''}
+          </div>` : ''}
           <label class="etiqueta-campo" style="width:110px">Página<input class="campo" id="pagina-palabra" type="number" min="0" inputmode="numeric" value="${libroPorId(libroId)?.paginaActual || ''}"></label>
           <span class="espacio"></span>
           <button type="button" class="boton principal" data-accion="guardar-palabra" data-libro="${esc(libroId || '')}">${icono('tarjetas')} Guardar tarjeta</button>
@@ -483,6 +499,9 @@ const Palabras = (() => {
         <label class="etiqueta-campo">${p.idioma === 'es' ? 'Significado (lo que verás al girar la tarjeta)' : 'Traducción (separa varias con comas)'}
           <input class="campo" id="p-traduccion" value="${esc((p.traducciones || []).join(', '))}" placeholder="${p.idioma === 'es' ? 'Opcional: tus propias palabras' : 'Escribe la traducción'}"></label>
         ${p.definiciones?.length ? `<ol class="definiciones">${p.definiciones.slice(0, 4).map(d => `<li>${d.tipo ? `<i>${esc(d.tipo)}</i> ` : ''}${esc(d.texto)}${d.ejemplo ? `<small>${esc(d.ejemplo)}</small>` : ''}</li>`).join('')}</ol>` : ''}
+        <label class="etiqueta-campo"><span>Mi definición <span class="nota-pequena">(${p.definiciones?.length ? 'si la escribes, sale en la tarjeta en vez de la del diccionario' : 'opcional; sale en la tarjeta'})</span></span>
+          <textarea class="campo" id="p-definicion" rows="2" placeholder="Con tus palabras, o la que hayas encontrado en otro diccionario">${esc(p.miDefinicion || '')}</textarea></label>
+        ${p.idioma === 'de' && !p.verbo ? camposGenero('p', p.genero || '', p.plural || '') : ''}
         <label class="etiqueta-campo">Frase del libro<textarea class="campo" id="p-frase" rows="2">${esc(p.frase)}</textarea></label>
         <div class="dos">
           <label class="etiqueta-campo">Página<input class="campo" id="p-pagina" type="number" min="0" inputmode="numeric" value="${p.pagina || ''}"></label>
@@ -500,9 +519,18 @@ const Palabras = (() => {
       p.frase = $('#p-frase').value;
       p.nota = $('#p-nota').value;
       p.pagina = parseInt($('#p-pagina').value, 10) || 0;
+      const def = $('#p-definicion').value.trim();
+      if (def) p.miDefinicion = def; else delete p.miDefinicion;
+      if ($('#p-genero')) {
+        p.genero = $('#p-genero').value;
+        p.plural = $('#p-plural').value.trim();
+        const cab = $('.ventana .cab-resultado .palabra-grande');
+        if (cab) cab.innerHTML = articulo(p) + esc(p.palabra);
+      }
       guardar(p);
     };
-    ['#p-traduccion', '#p-frase', '#p-nota', '#p-pagina'].forEach(s => $(s).addEventListener('input', guardarCampos));
+    ['#p-traduccion', '#p-frase', '#p-nota', '#p-pagina', '#p-definicion', '#p-genero', '#p-plural'].forEach(s => $(s)?.addEventListener('input', guardarCampos));
+    $('#p-genero')?.addEventListener('change', guardarCampos);
   }
 
   // ---------- Repaso: opciones ----------
@@ -663,8 +691,10 @@ const Palabras = (() => {
 
     const significadoHTML = p => `
       <span class="traduccion">${esc(resumenSignificado(p))}</span>
-      ${p.definiciones?.length && p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[0].texto)}</span>` : ''}
-      ${p.definiciones?.length > 1 && !p.traducciones?.length ? `<span class="def-tarjeta">${esc(p.definiciones[1].texto)}</span>` : ''}`;
+      ${(() => {
+        const extra = p.traducciones?.length ? defPrincipal(p) : (p.miDefinicion ? p.definiciones?.[0]?.texto : p.definiciones?.[1]?.texto);
+        return extra ? `<span class="def-tarjeta">${esc(extra)}</span>` : '';
+      })()}`;
     const palabraHTML = (p, conArticulo) => `<b class="palabra-tarjeta">${conArticulo ? articulo(p) : ''}${esc(p.palabra)}</b>
       ${conArticulo && lineaPlural(p) ? `<span class="nota-pequena">${lineaPlural(p)}</span>` : ''}
 `;
@@ -825,17 +855,17 @@ const Palabras = (() => {
   // ---------- Exportar ----------
   const textoFrente = p => articuloTexto(p) + p.palabra;
   function textoReverso(p, html) {
-    const partes = [(p.traducciones || []).join(', ') || p.definiciones?.[0]?.texto || ''];
+    const partes = [(p.traducciones || []).join(', ') || defPrincipal(p)];
     if (p.idioma === 'de' && p.genero) partes.push(p.plural ? 'Plural: die ' + p.plural : 'Sin plural');
     if (p.verbo) partes.push(textoVerbo(p));
-    if (p.traducciones?.length && p.definiciones?.[0]) partes.push(p.definiciones[0].texto);
+    if (p.traducciones?.length && defPrincipal(p)) partes.push(defPrincipal(p));
     if (p.frase) partes.push(html ? `<i>${esc(p.frase)}</i>` : p.frase);
     return partes.filter(Boolean).join(html ? '<br>' : ' — ');
   }
   function csvAnki() {
     return csv([
       ['Palabra', 'Significado', 'Definición', 'Frase', 'Libro', 'Idioma'],
-      ...E.palabras.map(p => [textoFrente(p), (p.traducciones || []).join(', '), p.definiciones?.[0]?.texto || '', p.frase, tituloVisible(libroPorId(p.libroId) || { titulo: '' }), IDIOMAS[p.idioma]?.nombre || p.idioma]),
+      ...E.palabras.map(p => [textoFrente(p), (p.traducciones || []).join(', '), defPrincipal(p), p.frase, tituloVisible(libroPorId(p.libroId) || { titulo: '' }), IDIOMAS[p.idioma]?.nombre || p.idioma]),
     ]);
   }
   /** Archivo de texto que Anki importa directamente (Archivo → Importar). */
@@ -894,6 +924,9 @@ const Palabras = (() => {
       const libroId = b.dataset.libro || '';
       const manual = $('#traduccion-manual')?.value.trim();
       if (manual) r.traducciones = manual.split(',').map(t => t.trim()).filter(Boolean);
+      const defManual = $('#definicion-manual')?.value.trim();
+      if (defManual) r.miDefinicion = defManual;
+      if ($('#manual-genero')) { r.genero = $('#manual-genero').value; r.plural = $('#manual-plural').value.trim(); }
       const p = nuevaPalabra(r, libroId, $('#frase-palabra')?.value.trim(), parseInt($('#pagina-palabra')?.value, 10) || 0);
       E.palabras.push(p);
       await guardar(p);
@@ -954,7 +987,8 @@ const Palabras = (() => {
       if (r.traducciones.length) p.traducciones = r.traducciones;
       if (r.definiciones.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
       if (r.idioma === 'de' && r.generoBuscado) {
-        Object.assign(p, { genero: r.genero, plural: r.plural, generoBuscado: true, gram2: true });
+        if (r.genero || !p.genero) Object.assign(p, { genero: r.genero, plural: r.plural }); // no se borra el género que pusiste tú
+        Object.assign(p, { generoBuscado: true, gram2: true });
         if (r.verbo) p.verbo = r.verbo; else delete p.verbo;
       }
       await guardar(p);
