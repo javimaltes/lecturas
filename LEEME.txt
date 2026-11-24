@@ -166,3 +166,9 @@ ISBN QUE NO SE ENCUENTRAN
 - Si un ISBN no está en las bases de datos, escribe el título en el cuadro que aparece: eliges tu libro
   de la lista y se guarda con el ISBN escaneado. Si no sale, «Ninguno: crearlo como…» lo crea con ese
   título y busca la portada sola.
+
+PALABRAS EN ESPAÑOL
+- No piden traducción: solo definición. Primero se busca en el Diccionario de la lengua española (RAE),
+  a través de rae-api.com (servicio gratuito no oficial); si no está, en Wiktionary.
+- Siempre hay un enlace «Ver en el diccionario de la RAE». Si no la encuentra, copia la definición de
+  allí y pégala en «Definición». En cualquier tarjeta puedes escribir «Mi definición».

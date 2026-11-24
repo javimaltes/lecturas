@@ -63,6 +63,23 @@ const Palabras = (() => {
   }
 
   /** es.wiktionary.org: definiciones en español de palabras en español. */
+  // Diccionario de la lengua española (RAE), a través de rae-api.com (servicio gratuito no oficial)
+  const CATEGORIAS_RAE = { noun: 'sust.', adjective: 'adj.', verb: 'verbo', adverb: 'adv.', interjection: 'interj.', pronoun: 'pron.', preposition: 'prep.', conjunction: 'conj.', article: 'art.' };
+  async function rae(palabra) {
+    const r = await pedirJSON('https://rae-api.com/api/words/' + encodeURIComponent(palabra.trim().toLowerCase()), 8000);
+    if (r.error) return { defs: [], error: r.error };
+    const datos = r.datos?.data || r.datos;
+    const defs = [];
+    for (const m of datos?.meanings || []) {
+      for (const se of m.senses || []) {
+        const texto = String(se.description || se.raw || '').replace(/^\s*\d+\.\s*/, '').trim();
+        if (texto) defs.push({ tipo: CATEGORIAS_RAE[se.category] || '', texto });
+      }
+    }
+    return { forma: datos?.word || palabra, defs: defs.slice(0, 6) };
+  }
+  const enlaceRAE = palabra => `<a class="enlace-externo" href="https://dle.rae.es/${encodeURIComponent(palabra.trim().toLowerCase())}" target="_blank" rel="noopener">Ver en el diccionario de la RAE ↗</a>`;
+
   async function wiktionaryEspanol(palabra) {
     let ultimoError = null;
     for (const forma of variantes(palabra, 'es')) {
@@ -186,9 +203,16 @@ const Palabras = (() => {
     let trad = { lista: [] };
     let gram = {};
     let definicionesEnIngles = false;
+    let fuente = '';
     if (idioma === 'es') {
-      defs = await wiktionaryEspanol(palabra);
-      if (!defs.defs.length && !defs.error) {
+      defs = await rae(palabra);
+      if (defs.defs.length) fuente = 'RAE';
+      else {
+        const w = await wiktionaryEspanol(palabra);
+        defs = w;
+        if (defs.defs.length) fuente = 'Wiktionary';
+      }
+      if (!defs.defs.length && !ERRORES_RED.includes(defs.error)) {
         defs = await wiktionaryIngles(palabra, 'es');
         definicionesEnIngles = defs.defs.length > 0;
       }
@@ -210,7 +234,7 @@ const Palabras = (() => {
       else if (defs.forma && defs.forma.toLowerCase() === palabra.toLowerCase()) forma = defs.forma;
     }
     return {
-      palabra: forma, idioma, traducciones: trad.lista, definiciones: defs.defs, definicionesEnIngles, sinRed,
+      palabra: forma, idioma, traducciones: trad.lista, definiciones: defs.defs, definicionesEnIngles, sinRed, ...(fuente ? { fuente } : {}),
       ...(idioma === 'de' ? { genero: gram.genero || '', plural: gram.plural || '', verbo: gram.verbo || null, generoBuscado: !gram.error && !sinRed, gram2: !gram.error && !sinRed } : {}),
     };
   }
@@ -219,7 +243,7 @@ const Palabras = (() => {
   function nuevaPalabra(r, libroId, frase, pagina) {
     return {
       id: uid(), libroId: libroId || '', palabra: r.palabra, idioma: r.idioma,
-      traducciones: r.traducciones || [], definiciones: r.definiciones || [], definicionesEnIngles: !!r.definicionesEnIngles,
+      traducciones: r.traducciones || [], definiciones: r.definiciones || [], definicionesEnIngles: !!r.definicionesEnIngles, ...(r.fuente ? { fuente: r.fuente } : {}),
       ...(r.idioma === 'de' ? { genero: r.genero || '', plural: r.plural || '', generoBuscado: !!r.generoBuscado, gram2: !!r.gram2, ...(r.verbo ? { verbo: r.verbo } : {}) } : {}),
       ...(r.miDefinicion ? { miDefinicion: r.miDefinicion } : {}),
       frase: frase || '', pagina: pagina || 0, nota: '', caja: 0, proxima: ahora(), aciertos: 0, fallos: 0, fecha: ahora(),
@@ -275,7 +299,7 @@ const Palabras = (() => {
       const r = await buscar(p.palabra, p.idioma);
       if (r.sinRed) break;
       if (!p.traducciones?.length) p.traducciones = r.traducciones;
-      if (!p.definiciones?.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
+      if (!p.definiciones?.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; if (r.fuente) p.fuente = r.fuente; }
       if (r.idioma === 'de') Object.assign(p, { palabra: r.palabra, genero: r.genero, plural: r.plural, generoBuscado: r.generoBuscado, gram2: r.gram2 }, r.verbo ? { verbo: r.verbo } : {});
       delete p.pendiente;
       await guardar(p);
@@ -462,6 +486,7 @@ const Palabras = (() => {
         ${r.verbo ? `<p class="formas-verbo">${esc(formasVerbo(r))}</p>${tablaVerbo(r)}` : ''}
         ${r.definiciones.length ? `<ol class="definiciones">${r.definiciones.slice(0, 4).map(d => `<li>${d.tipo ? `<i>${esc(d.tipo)}</i> ` : ''}${esc(d.texto)}${d.ejemplo ? `<small>${esc(d.ejemplo)}</small>` : ''}</li>`).join('')}</ol>` : ''}
         ${r.definicionesEnIngles ? '<p class="nota-pequena">Definiciones en inglés (no la he encontrado en el diccionario en español).</p>' : (r.idioma !== 'es' && r.definiciones.length ? '<p class="nota-pequena">Definiciones en inglés, de Wiktionary.</p>' : '')}
+        ${r.idioma === 'es' ? `<p class="nota-pequena">${r.fuente === 'RAE' ? 'Definiciones del Diccionario de la lengua española (RAE). ' : r.fuente === 'Wiktionary' ? 'Definiciones de Wiktionary (no la he encontrado en la RAE). ' : ''}${enlaceRAE(r.palabra)}</p>` : ''}
       </div>`;
     }
     if (ya) {
@@ -472,8 +497,8 @@ const Palabras = (() => {
           <textarea class="campo" id="frase-palabra" rows="2" placeholder="Te ayudará a recordarla en contexto"></textarea></label>
         <div class="fila-campo" style="align-items:flex-end;flex-wrap:wrap">
           ${nada && !r.sinRed ? `<div style="flex:1 1 100%;display:flex;flex-direction:column;gap:10px">
-            <label class="etiqueta-campo">${r.idioma === 'es' ? 'Significado' : 'Traducción'}<input class="campo" id="traduccion-manual" placeholder="Escríbela tú"></label>
-            <label class="etiqueta-campo"><span>Definición <span class="nota-pequena">(opcional)</span></span><textarea class="campo" id="definicion-manual" rows="2" placeholder="Con tus palabras, o la que hayas encontrado en otro diccionario"></textarea></label>
+            ${r.idioma === 'es' ? `<p class="nota-pequena" style="margin:0">${enlaceRAE(palabra)}: si está ahí, copia la definición y pégala abajo.</p>` : `<label class="etiqueta-campo">Traducción<input class="campo" id="traduccion-manual" placeholder="Escríbela tú"></label>`}
+            <label class="etiqueta-campo"><span>Definición ${r.idioma === 'es' ? '' : '<span class="nota-pequena">(opcional)</span>'}</span><textarea class="campo" id="definicion-manual" rows="2" placeholder="Con tus palabras, o la que hayas encontrado en otro diccionario"></textarea></label>
             ${r.idioma === 'de' ? camposGenero('manual', r.genero || '', r.plural || '') : ''}
           </div>` : ''}
           <label class="etiqueta-campo" style="width:110px">Página<input class="campo" id="pagina-palabra" type="number" min="0" inputmode="numeric" value="${libroPorId(libroId)?.paginaActual || ''}"></label>
@@ -496,11 +521,12 @@ const Palabras = (() => {
         ${lineaPlural(p) ? `<p class="ayuda" style="margin:0">${lineaPlural(p)}</p>` : ''}
         ${p.verbo ? `<p class="formas-verbo">${esc(formasVerbo(p))}</p>${tablaVerbo(p)}` : ''}
         ${p.pendiente ? `<div class="consejo">${icono('nube')}<p>Guardada sin conexión: buscaré su significado cuando vuelva la cobertura.</p></div>` : ''}
-        <label class="etiqueta-campo">${p.idioma === 'es' ? 'Significado (lo que verás al girar la tarjeta)' : 'Traducción (separa varias con comas)'}
-          <input class="campo" id="p-traduccion" value="${esc((p.traducciones || []).join(', '))}" placeholder="${p.idioma === 'es' ? 'Opcional: tus propias palabras' : 'Escribe la traducción'}"></label>
+        ${p.idioma === 'es' && !(p.traducciones || []).length ? '' : `<label class="etiqueta-campo">${p.idioma === 'es' ? 'Significado corto' : 'Traducción (separa varias con comas)'}
+          <input class="campo" id="p-traduccion" value="${esc((p.traducciones || []).join(', '))}" placeholder="${p.idioma === 'es' ? 'Opcional' : 'Escribe la traducción'}"></label>`}
         ${p.definiciones?.length ? `<ol class="definiciones">${p.definiciones.slice(0, 4).map(d => `<li>${d.tipo ? `<i>${esc(d.tipo)}</i> ` : ''}${esc(d.texto)}${d.ejemplo ? `<small>${esc(d.ejemplo)}</small>` : ''}</li>`).join('')}</ol>` : ''}
         <label class="etiqueta-campo"><span>Mi definición <span class="nota-pequena">(${p.definiciones?.length ? 'si la escribes, sale en la tarjeta en vez de la del diccionario' : 'opcional; sale en la tarjeta'})</span></span>
           <textarea class="campo" id="p-definicion" rows="2" placeholder="Con tus palabras, o la que hayas encontrado en otro diccionario">${esc(p.miDefinicion || '')}</textarea></label>
+        ${p.idioma === 'es' ? `<p class="nota-pequena" style="margin:0">${p.fuente === 'RAE' ? 'Definiciones de la RAE. ' : ''}${enlaceRAE(p.palabra)}</p>` : ''}
         ${p.idioma === 'de' && !p.verbo ? camposGenero('p', p.genero || '', p.plural || '') : ''}
         <label class="etiqueta-campo">Frase del libro<textarea class="campo" id="p-frase" rows="2">${esc(p.frase)}</textarea></label>
         <div class="dos">
@@ -515,7 +541,7 @@ const Palabras = (() => {
         <button type="button" class="boton principal" data-accion="cerrar-ventana">Hecho</button>`,
     });
     const guardarCampos = () => {
-      p.traducciones = $('#p-traduccion').value.split(',').map(t => t.trim()).filter(Boolean);
+      if ($('#p-traduccion')) p.traducciones = $('#p-traduccion').value.split(',').map(t => t.trim()).filter(Boolean);
       p.frase = $('#p-frase').value;
       p.nota = $('#p-nota').value;
       p.pagina = parseInt($('#p-pagina').value, 10) || 0;
@@ -985,7 +1011,7 @@ const Palabras = (() => {
       const r = await buscar(p.palabra, p.idioma);
       if (r.sinRed) { avisar('Sin conexión'); b.disabled = false; b.textContent = 'Buscar otra vez'; return; }
       if (r.traducciones.length) p.traducciones = r.traducciones;
-      if (r.definiciones.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; }
+      if (r.definiciones.length) { p.definiciones = r.definiciones; p.definicionesEnIngles = r.definicionesEnIngles; if (r.fuente) p.fuente = r.fuente; }
       if (r.idioma === 'de' && r.generoBuscado) {
         if (r.genero || !p.genero) Object.assign(p, { genero: r.genero, plural: r.plural }); // no se borra el género que pusiste tú
         Object.assign(p, { generoBuscado: true, gram2: true });
